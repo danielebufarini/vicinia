@@ -62,6 +62,9 @@ final class DesktopView: UIView, UIKeyInput, UIGestureRecognizerDelegate, UIPoin
     var onInput: ((ViewInput) -> Void)?
     /// Local only: shows or hides the session toolbar; never remote input.
     var onToolbarToggle: (() -> Void)?
+    /// Local only: reports the two-finger double-tap activation point (window
+    /// coordinates when attached to a window, otherwise view coordinates).
+    var onToolbarToggleAt: ((CGPoint) -> Void)?
     /// Mirrors the toolbar for the accessibility action and VoiceOver focus.
     var toolbarVisible = true {
         didSet {
@@ -99,10 +102,18 @@ final class DesktopView: UIView, UIKeyInput, UIGestureRecognizerDelegate, UIPoin
     private var holdDragging = false
     private var scrollRemainder = CGPoint.zero
     private var pinchCentroid: CGPoint?
+    private lazy var pinch = UIPinchGestureRecognizer(target: self, action: #selector(pinchChanged))
+    private lazy var tap = UITapGestureRecognizer(target: self, action: #selector(tapped))
     private lazy var motion = UIPanGestureRecognizer(target: self, action: #selector(moved))
     private lazy var hold = UILongPressGestureRecognizer(target: self, action: #selector(held))
     private lazy var right = UITapGestureRecognizer(target: self, action: #selector(rightTapped))
     private lazy var toolbarToggle = UITapGestureRecognizer(target: self, action: #selector(toolbarToggled))
+    var singleTapRecognizer: UITapGestureRecognizer { tap }
+    var rightTapRecognizer: UITapGestureRecognizer { right }
+    var toolbarToggleRecognizer: UITapGestureRecognizer { toolbarToggle }
+    var panRecognizer: UIPanGestureRecognizer { motion }
+    var pinchRecognizer: UIPinchGestureRecognizer { pinch }
+    var longPressRecognizer: UILongPressGestureRecognizer { hold }
     private var mice: [GCMouse] = []
     @objc private func bindMice() {
         for m in mice { m.mouseInput?.mouseMovedHandler = nil; m.mouseInput?.leftButton.pressedChangedHandler = nil; m.mouseInput?.rightButton?.pressedChangedHandler = nil; m.mouseInput?.middleButton?.pressedChangedHandler = nil }
@@ -180,8 +191,6 @@ final class DesktopView: UIView, UIKeyInput, UIGestureRecognizerDelegate, UIPoin
         backgroundColor = .black
         isOpaque = true
         isMultipleTouchEnabled = true
-        let pinch = UIPinchGestureRecognizer(target: self, action: #selector(pinchChanged))
-        let tap = UITapGestureRecognizer(target: self, action: #selector(tapped))
         right.numberOfTouchesRequired = 2
         tap.require(toFail: right)
         toolbarToggle.numberOfTouchesRequired = 2
@@ -246,7 +255,12 @@ final class DesktopView: UIView, UIKeyInput, UIGestureRecognizerDelegate, UIPoin
     /// Two-finger double tap: local in every input mode, including local pan.
     @objc private func toolbarToggled(_ g: UITapGestureRecognizer) {
         guard g.state == .ended else { return }
-        onToolbarToggle?()
+        let point = g.location(in: window ?? self)
+        if let onToolbarToggleAt {
+            onToolbarToggleAt(point)
+        } else {
+            onToolbarToggle?()
+        }
     }
     @objc private func held(_ g: UILongPressGestureRecognizer) {
         guard !panEnabled else { return }

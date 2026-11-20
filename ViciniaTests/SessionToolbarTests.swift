@@ -733,7 +733,7 @@ struct ToolbarRenderingInvariantTests {
             view.subviews.forEach(collect)
         }
         collect(host.view)
-        #expect(buttons.compactMap { $0.configuration?.title }.filter { !$0.contains("HUD") } == ["Esc", "Fit", "Close"])
+        #expect(buttons.compactMap { $0.configuration?.title } == ["Fit", "Close"])
         let fit = try #require(buttons.first { $0.configuration?.title == "Fit" })
         let renderer = try #require(controller.renderer)
         renderer.zoom = 2
