@@ -13,10 +13,30 @@ mouse or trackpad.
 - Encrypted connections with host-key verification.
 - Remote mouse and keyboard input, with pointer lock.
 - Pinch to zoom and pan around the desktop.
-- A toolbar that stays out of the way until you need it.
+- Radial immersive session controls with Retina, Fit and Close actions.
+- Five-second auto-hide, with a two-finger double tap to show the controls.
 
-Vicinia 1.0 connects directly to your Mac over the local network. It does not
+Vicinia 1.1 connects directly to your Mac over the local network. It does not
 require Internet port forwarding.
+
+## What's new in Vicinia 1.1
+
+Version 1.1 replaces the previous floating toolbar with compact **radial
+immersive controls**, keeping the remote desktop clear when you are working.
+
+- **Retina** opens session settings: Retina or More Space display mode,
+  one-finger local pan, Trackpad or Direct input, and the on-screen keyboard.
+- **Fit** resets the local zoom and pan to show the full remote desktop.
+- **Close** ends the remote session and returns to the connection screen.
+- The **X** in the center dismisses the menu without disconnecting.
+
+Double-tap anywhere on the remote desktop with **two fingers** to show or hide
+the radial controls. They also hide automatically after **five seconds of
+inactivity**. The former Esc and HUD buttons are no longer part of the release
+controls; Escape remains available from the on-screen keyboard accessory bar
+or a physical keyboard.
+
+![Vicinia 1.1 radial immersive controls](Docs/v1/images/vicinia-radial-controls.jpg)
 
 ## Requirements
 
@@ -33,8 +53,10 @@ Enter your Mac's IP address or hostname and your macOS username and password.
 The first time you connect, Vicinia asks you to verify the Mac's key fingerprint
 before trusting it. The key is saved for future connections.
 
-Once connected, double-tap with two fingers to show or hide the toolbar. It
-also disappears automatically after five seconds of inactivity.
+Once connected, double-tap with two fingers to show or hide the radial controls.
+Tap **Retina** to adjust display and input settings, **Fit** to reset the local
+view, or **Close** to disconnect. The controls disappear automatically after
+five seconds of inactivity.
 
 See the [user manual](Docs/v1/USER_MANUAL.md) for setup instructions, gestures
 and troubleshooting.
