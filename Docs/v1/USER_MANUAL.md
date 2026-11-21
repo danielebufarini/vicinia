@@ -1,12 +1,14 @@
-# Vicinia 1.0 — User Manual
+# Vicinia 1.1 — User Manual
 
-**Application version:** 1.0  
+**Application version:** 1.1  
 **Platforms:** iPhone and iPad  
 **Language:** English
 
 Vicinia lets you view and control your Mac from an iPhone or iPad on your local network. It uses Apple's native High Performance Screen Sharing (HPSS) service, so you do not need to install a separate Vicinia server on your Mac.
 
 With Vicinia, you can open applications, browse files in Finder, interact with websites, edit documents and use your Mac's desktop while away from your desk.
+
+Version 1.1 introduces **radial immersive controls**, a compact circular menu for changing display settings, fitting the desktop to the screen and closing the session. It retains the two-finger double-tap gesture and five-second auto-hide behavior.
 
 ## Contents
 
@@ -33,7 +35,7 @@ With Vicinia, you can open applications, browse files in Finder, interact with w
 | iPhone | A19 Pro or later, with iOS 27 or later |
 | iPad | iPad Pro with M5 or later, with iPadOS 27 or later |
 
-Vicinia is a universal application designed for both iPhone and iPad. Version 1.0 has been tested on a physical iPhone Air with A19 Pro. Physical iPad and accessory compatibility has not yet been fully verified. Support for every device, keyboard layout or accessory combination is not guaranteed.
+Vicinia is a universal application designed for both iPhone and iPad. Version 1.1 has been tested on a physical iPhone Air with A19 Pro. Physical iPad and accessory compatibility has not yet been fully verified. Support for every device, keyboard layout or accessory combination is not guaranteed.
 
 A physical keyboard and a mouse or trackpad are optional, but recommended for extended work, particularly for tasks that require keyboard shortcuts.
 
@@ -50,7 +52,7 @@ You need:
 
 Your iPhone or iPad and Mac must be able to communicate over a trusted local network. The Mac can use Ethernet or Wi-Fi, while the iPhone or iPad normally uses Wi-Fi.
 
-Use the Mac's local IPv4 address for the most reliable connection. Version 1.0 is intended for local network use; direct access over the public Internet is not supported.
+Use the Mac's local IPv4 address for the most reliable connection. Version 1.1 is intended for local network use; direct access over the public Internet is not supported.
 
 ## 2. Prepare your Mac
 
@@ -96,7 +98,7 @@ The command displays the account name. Use the password you normally use to log 
 
 ### 2.4 Keep the Mac available
 
-Ensure the Mac is powered on, awake and connected to the network. A sleeping or disconnected Mac may be unreachable. For extended remote use, configure its energy or battery settings appropriately. Vicinia 1.0 does not provide a dedicated Wake-on-LAN feature.
+Ensure the Mac is powered on, awake and connected to the network. A sleeping or disconnected Mac may be unreachable. For extended remote use, configure its energy or battery settings appropriately. Vicinia 1.1 does not provide a dedicated Wake-on-LAN feature.
 
 ## 3. Connect to your Mac
 
@@ -131,7 +133,7 @@ The first time you connect to a particular host address, Vicinia displays a dial
 3. If the fingerprints match, tap **Trust and Pin**.
 4. If they differ, or you cannot establish that the connection is trustworthy, tap **Cancel**.
 
-Vicinia does not provide a separate host-side fingerprint retrieval utility in version 1.0. If you own the Mac and choose to accept a fingerprint without independently comparing it, you are using *trust on first use* (TOFU). This remembers the identity presented during the first connection but does not independently authenticate it. Only consider this on a network you control and trust.
+Vicinia does not provide a separate host-side fingerprint retrieval utility in version 1.1. If you own the Mac and choose to accept a fingerprint without independently comparing it, you are using *trust on first use* (TOFU). This remembers the identity presented during the first connection but does not independently authenticate it. Only consider this on a network you control and trust.
 
 Once accepted, the fingerprint is saved on the current iPhone or iPad for the host address you entered. Subsequent connections to that address are checked against the saved fingerprint. If the key changes, Vicinia refuses the connection rather than silently trusting the new identity.
 
@@ -141,81 +143,79 @@ After successful authentication and display negotiation, the Mac's desktop appea
 
 You can now open applications and interact with the Mac. A virtual display is negotiated for the session, so its resolution and layout may differ from those of a physical monitor attached to your Mac.
 
-The initial session uses **Retina** display mode and **Trackpad** input mode. The on-screen keyboard is initially hidden. The session toolbar appears together with the desktop and hides automatically after five seconds; see [section 4](#4-session-controls).
+The initial session uses **Retina** display mode and **Trackpad** input mode. The on-screen keyboard is initially hidden. The **radial controls** appear when the desktop opens and hide automatically after five seconds of inactivity; see [section 4](#4-session-controls).
 
 ## 4. Session controls
 
-During a session, Vicinia shows the Mac's desktop full screen without permanent controls. The session toolbar floats in the upper-right corner only when you need it. When it is hidden, nothing of it remains on screen: the whole display belongs to the remote desktop, and no static Vicinia element stays on screen for long periods, which reduces the risk of image persistence on OLED displays.
+Version 1.1 replaces the previous floating toolbar with **radial immersive controls**. The circular menu appears near the upper-right corner of the remote desktop and provides three primary actions: **Retina**, **Fit** and **Close**. The **X** in the center dismisses the menu without disconnecting.
 
-![Vicinia displaying the remote Mac desktop in landscape orientation, with Xcode open and the session toolbar visible in the upper-right corner.](images/vicinia-remote-desktop.jpg)
+When the controls are hidden, the remote desktop occupies the full screen without a persistent Vicinia overlay. This also avoids keeping a static control in one place on an OLED screen for extended periods.
 
-*Figure 2 — An active remote desktop session with the session toolbar shown in the upper-right corner. This screenshot was taken with a diagnostic build, which adds a HUD button, and predates the current Liquid Glass toolbar appearance.*
+![Vicinia 1.1 radial immersive controls, showing Retina, Fit, Close and the central X over the remote Mac desktop.](images/vicinia-radial-controls.jpg)
 
-### 4.1 Show and hide the toolbar
+*Figure 2 — Vicinia 1.1 radial immersive controls on a physical iPhone. The Xcode interface and performance gauges belong to the remote Mac desktop, not to Vicinia's controls.*
 
-| To show or hide the toolbar | Do this |
+### 4.1 Open and dismiss the radial controls
+
+| Action | How to do it |
 | --- | --- |
-| With touch | Double-tap anywhere on the desktop with two fingers. |
-| With VoiceOver or Switch Control | Use the actions described in [section 4.5](#45-accessibility). |
+| **Open the radial controls** | Double-tap anywhere on the remote desktop with two fingers. |
+| **Dismiss the radial controls** | Tap the **X** in the center, tap outside the radial menu, or double-tap with two fingers again. |
+| **Let them hide automatically** | After **five seconds of inactivity**, the radial controls disappear. |
+| **Use an option** | Tap the relevant radial button. **Retina** opens the settings menu; **Fit** adjusts the local view; **Close** ends the session. |
 
-With a mouse or trackpad, show the toolbar with the two-finger double tap on the screen, then click its controls: see [section 8.1](#81-physical-mouse-or-trackpad). Vicinia 1.0 has no keyboard shortcut for the toolbar.
+The controls appear when a session begins and retain the **five-second auto-hide** behavior from version 1.0. You can reopen them at any time with the same two-finger double tap. Dismissing the controls does not change the remote resolution, the current zoom or the pointer position.
 
-The toolbar behaves as follows:
+The gesture is handled locally by Vicinia and is not sent to the Mac. There is no reserved keyboard shortcut for opening the menu; combinations such as **⌘⇧T** remain available to the remote Mac.
 
-- When the remote desktop first appears, the toolbar is shown and then hides after five seconds without use.
-- Each time you show it, or use one of its controls, it stays for another five seconds.
-- It stays visible while you are pressing one of its controls, even for longer than five seconds, and while the session menu is open. The five seconds start again when you release the control.
-- It hides as soon as you work on the Mac: click, tap, press and drag, scroll or type. That action still reaches the Mac as usual. Moving the pointer, and pressing a modifier key on its own, does not hide it.
-- While Vicinia is connecting, and after a session has ended, the toolbar stays visible so that **Close** is always available.
-- Showing or hiding the toolbar never changes the remote display, its resolution, the local zoom or the pointer position.
+On your first connection, a brief onboarding hint explains the two-finger double-tap gesture. It disappears automatically and does not permanently occupy desktop space.
 
-The two-finger double tap is handled by Vicinia and is never sent to the Mac. Every key you press, including **⌘⇧T**, is sent to the Mac as usual.
-
-The first time you connect to a Mac, a short hint appears near the bottom of the screen:
-
-> **Double-tap with two fingers**
-> Show or hide the session toolbar at any time.
-
-It disappears on its own after a few seconds, does not block the desktop, and is not shown again on later connections or after restarting the app.
-
-### 4.2 Toolbar controls
+### 4.2 Radial buttons
 
 | Control | Function |
 | --- | --- |
-| **Retina** / **More Space** | Opens the session menu. The button shows the current display mode. |
-| **Esc** | Sends the Escape key to the remote Mac. |
-| **Fit** | Resets local zoom and pan to show the complete remote desktop within the available viewport. |
-| **Close** | Ends the connection and returns to the home screen. |
+| **Retina** | Opens the settings panel with **Retina**, **More Space**, **Local pan (one finger)**, **Input** and **Keyboard**. |
+| **Fit** | Resets local zoom and pan to display the complete remote desktop within the available viewport. |
+| **Close** | Disconnects from the Mac and returns to the connection screen. |
+| **X** (center) | Dismisses the radial controls while keeping the remote session connected. |
 
-### 4.3 Session menu
+**Close** and the central **X** serve different purposes: use **X** to continue working without the menu, or **Close** to end the connection.
 
-Show the toolbar if it is hidden, then tap the button labelled **Retina** or **More Space** to access these options:
+### 4.3 Settings panel
+
+Open the radial controls, then tap **Retina** to display the session settings.
+
+![Vicinia 1.1 session settings panel opened from the radial Retina button, with Retina, More Space, Local pan, Input and Keyboard options.](images/vicinia-session-settings.jpg)
+
+*Figure 3 — The settings panel opened from the Retina radial button, with the radial Close button still visible behind it.*
 
 | Option | Function |
 | --- | --- |
-| **Retina** | Requests a high-density remote display with larger, more readable interface elements. |
-| **More Space** | Requests a remote display with more usable desktop space and smaller interface elements. |
-| **Local pan (one finger)** | Allows you to reposition the zoomed desktop instead of controlling the Mac with pointing gestures. |
-| **Input → Trackpad** | Uses finger movements to move the remote pointer relatively, like a trackpad. |
-| **Input → Direct** | Maps touch positions directly to positions on the remote desktop. |
-| **Keyboard** | Shows or hides the on-screen keyboard. |
+| **Retina** | Requests a high-density desktop with larger, more readable macOS interface elements. |
+| **More Space** | Requests a desktop with more usable workspace and smaller interface elements. |
+| **Local pan (one finger)** | Lets one finger reposition a zoomed desktop instead of controlling the Mac's pointer. |
+| **Input → Trackpad** | Uses relative finger movements to move the remote pointer. |
+| **Input → Direct** | Maps touches directly to positions on the remote desktop. |
+| **Keyboard** | Shows or hides the iPhone or iPad on-screen keyboard. |
 
-### 4.4 Status overlay (diagnostic builds only)
+The **Input** row displays the current mode (for example, **Trackpad**) and opens its mode-selection submenu. Details of these settings are provided in [sections 5–7](#5-control-the-mac-with-touch-gestures).
 
-The App Store version of Vicinia 1.0 does not include the status overlay (HUD). Diagnostic builds used for development show it in the upper-left corner, with connection, display, video, frame presentation and keyboard/pointer-lock information, and add a **HUD** / **Hide HUD** button to the toolbar. A low count of newly presented desktop frames can be normal when the Mac's screen is static; the counter is not a direct measurement of network speed or input latency.
+### 4.4 Escape key and diagnostic overlays
+
+The App Store version of Vicinia 1.1 does not display separate **Esc** or **HUD** buttons in the radial controls. This does not remove Escape-key functionality: use **Esc** on the on-screen keyboard's accessory bar or a compatible physical keyboard.
+
+The developer-only status overlay (HUD) is not available in the App Store version. Diagnostic builds may provide connection, display, video and input metrics, but they are not part of the release UI. A low count of new desktop frames can be normal when the remote screen is static.
 
 ### 4.5 Accessibility
 
-- With VoiceOver, the remote desktop is a single element named **Remote Mac desktop**. To show or hide the toolbar, double-tap that element, perform the VoiceOver two-finger double tap (Magic Tap) while it is selected, or use the **Show session toolbar** / **Hide session toolbar** action in the Actions rotor.
-- While VoiceOver or Switch Control is running, the toolbar does not hide by itself, so it never disappears while you are navigating it. Hide it with the same action when you no longer need it.
-- When the toolbar appears, VoiceOver moves to its first control. When it hides, VoiceOver returns to the remote desktop.
-- VoiceOver reads the first-connection hint aloud.
-- With **Reduce Motion** enabled, the toolbar and the hint fade in and out without sliding.
-- The toolbar respects the screen's safe areas, the Dynamic Island and the camera housing in every orientation. It does not change the system's edge gestures.
+- With VoiceOver, the remote desktop is presented as **Remote Mac desktop**. The two-finger gesture and the available accessibility actions can be used to show or dismiss the session controls.
+- The radial buttons provide separate targets for the display settings, Fit, Close and dismissal. **X** dismisses the menu without ending the remote connection.
+- The session controls are designed to respect the device's safe areas, Dynamic Island and camera housing. They do not change the system's edge gestures.
+- With **Reduce Motion** enabled, presentation and dismissal should avoid unnecessary movement; available animation behavior depends on the accessibility settings of the device.
 
 ## 5. Control the Mac with touch gestures
 
-Vicinia offers two input modes. Choose the one best suited to the task from the session menu. Turn off **Local pan (one finger)** before attempting to control the remote pointer.
+Vicinia offers two input modes. Choose the one best suited to the task under **Retina → Input** in the radial settings panel. Turn off **Local pan (one finger)** before attempting to control the remote pointer.
 
 ### 5.1 Trackpad mode (default)
 
@@ -230,9 +230,9 @@ In Trackpad mode, the touchscreen behaves like a large trackpad. The pointer mov
 | Slide two fingers vertically or horizontally | Scroll the remote content. |
 | Press and hold with one finger, then move it | Hold the left mouse button and drag. Lift your finger to release. |
 | Pinch or spread two fingers | Zoom the local view of the desktop. |
-| Double-tap with two fingers | Show or hide the session toolbar. Nothing is sent to the Mac. |
+| Double-tap with two fingers | Show or hide the radial controls. Nothing is sent to the Mac. |
 
-A two-finger right-click is sent about a third of a second after you lift your fingers, once Vicinia can tell it apart from the two-finger double tap that shows or hides the toolbar. Neither tap of that double tap reaches the Mac.
+A two-finger right-click is sent about a third of a second after you lift your fingers, once Vicinia can tell it apart from the two-finger double tap that shows or hides the radial controls. Neither tap of that double tap reaches the Mac.
 
 For example, to open a folder in Finder, move the pointer over the folder and double-tap. To show its contextual menu, place the pointer over the folder and tap with two fingers.
 
@@ -251,7 +251,7 @@ In Direct mode, your touch position corresponds to a location on the remote desk
 | Press and hold, then move your finger | Hold the left mouse button and drag. Lift your finger to release. |
 | Slide two fingers vertically or horizontally | Scroll the remote content. |
 | Pinch or spread two fingers | Zoom the local view of the desktop. |
-| Double-tap with two fingers | Show or hide the session toolbar. Nothing is sent to the Mac. |
+| Double-tap with two fingers | Show or hide the radial controls. Nothing is sent to the Mac. |
 
 A one-finger drag in Direct mode is not a scrolling gesture: it can select text, move an item or drag a window. Use two fingers when you intend to scroll.
 
@@ -265,7 +265,7 @@ You can move items entirely within the remote Mac:
 2. In Direct mode, touch and drag the item directly.
 3. Lift your finger to release it at the destination.
 
-This performs a normal macOS drag operation. It does not transfer a file between your Mac and iPhone or iPad. Inter-device drag-and-drop and file transfer are not available in version 1.0.
+This performs a normal macOS drag operation. It does not transfer a file between your Mac and iPhone or iPad. Inter-device drag-and-drop and file transfer are not available in version 1.1.
 
 ## 6. Adjust the remote display
 
@@ -278,8 +278,8 @@ This performs a normal macOS drag operation. It does not transfer a file between
 
 To switch modes:
 
-1. Show the toolbar if it is hidden, then tap the current display mode.
-2. Select **Retina** or **More Space**.
+1. Show the radial controls with a two-finger double tap, then tap **Retina**.
+2. In the settings panel, select **Retina** or **More Space**.
 3. Wait for the Mac to update the remote display.
 
 During renegotiation, Vicinia may show **Updating display… Last complete desktop retained**. The old image remains visible while the new display becomes ready; wait before attempting further input.
@@ -297,15 +297,15 @@ Local magnification ranges from the fitted view up to 4× that view. Zooming doe
 ### 6.3 Pan the zoomed view
 
 1. Zoom in until part of the remote desktop extends beyond your screen.
-2. Open the session menu and enable **Local pan (one finger)**.
+2. Open the radial controls, tap **Retina**, and enable **Local pan (one finger)** in the settings panel.
 3. Drag one finger across the screen to reveal a different part of the desktop.
-4. Disable **Local pan (one finger)** to resume normal pointer interaction.
+4. Return to the same settings panel and disable **Local pan (one finger)** to resume normal pointer interaction.
 
 While local pan is enabled, pointing gestures and mouse or Pencil input to the Mac are suppressed. This helps you reposition the view without accidentally clicking or dragging something on the Mac. Keyboard input is separate.
 
 ### 6.4 Return to the full desktop
 
-Tap **Fit** to remove local magnification and return to the complete desktop view. Fit does not change the selected display mode and does not automatically turn off Local pan.
+Open the radial controls and tap **Fit** to remove local magnification and return to the complete desktop view. Fit does not change the selected display mode and does not automatically turn off Local pan.
 
 ### 6.5 Change orientation
 
@@ -320,9 +320,9 @@ Showing or hiding the software keyboard does not itself request a new remote res
 ### 7.1 On-screen keyboard
 
 1. Click or tap an editable field in a Mac application.
-2. Open the session menu and enable **Keyboard**.
+2. Open the radial controls, tap **Retina**, and select **Keyboard** in the settings panel.
 3. Enter text using the iPhone or iPad keyboard.
-4. To dismiss it, tap **Hide** on the keyboard accessory bar or turn off **Keyboard** in the session menu.
+4. To dismiss it, tap **Hide** on the keyboard accessory bar or turn off **Keyboard** from the same settings panel.
 
 The on-screen keyboard supports basic ASCII text (English letters, numbers and standard punctuation), Return and Backspace. Vicinia disables automatic correction, capitalization and smart punctuation for remote text entry.
 
@@ -337,7 +337,7 @@ The accessory bar provides these controls:
 
 Swipe horizontally along the accessory bar to reveal additional buttons if they do not all fit on your screen.
 
-The virtual keyboard is intended for basic text entry. Accented characters, emoji, non-Latin text, dictation, input methods and full modifier-key combinations are not supported as a complete remote text-entry solution in version 1.0. The actual characters produced by key events can also depend on the Mac's active keyboard layout.
+The virtual keyboard is intended for basic text entry. Accented characters, emoji, non-Latin text, dictation, input methods and full modifier-key combinations are not supported as a complete remote text-entry solution in version 1.1. The actual characters produced by key events can also depend on the Mac's active keyboard layout.
 
 ### 7.2 Physical keyboard
 
@@ -365,7 +365,7 @@ These are macOS shortcut examples, not a guarantee that every combination is del
 
 Vicinia does not reserve any keyboard shortcut during a session: every combination, including **⌘⇧T**, is passed to the Mac.
 
-Copying and pasting within the remote Mac uses the Mac's clipboard. Vicinia 1.0 does not synchronize the Mac's clipboard with the iPhone or iPad.
+Copying and pasting within the remote Mac uses the Mac's clipboard. Vicinia 1.1 does not synchronize the Mac's clipboard with the iPhone or iPad.
 
 ### 7.3 Input recovery notices
 
@@ -389,9 +389,9 @@ A compatible mouse or trackpad can make desktop tasks easier, especially when us
 
 Vicinia implements relative pointer input when the system grants pointer lock, and position-based input when appropriate. Primary, secondary and middle mouse buttons and scrolling are supported by the input implementation, subject to device and accessory compatibility.
 
-While the session toolbar is hidden, Vicinia asks iPadOS to lock the pointer to the session, so that its movement goes to the Mac as relative motion. While the toolbar is visible, the pointer is released: it appears on the screen and can click the toolbar's controls. Clicking the desktop then works with the pointer's position and hides the toolbar; the pointer returns to the Mac when the toolbar hides, after you release any mouse button you are holding. iPadOS decides whether a lock is granted (for example, not in every window arrangement).
+While the radial controls are hidden, Vicinia asks iPadOS to lock the pointer to the session, so that its movement goes to the Mac as relative motion. While the radial controls are visible, the pointer is released: it appears on the screen and can click the radial controls. Clicking the desktop then works with the pointer's position and dismisses the radial controls; the pointer returns to the Mac when the controls hide, after you release any mouse button you are holding. iPadOS decides whether a lock is granted (for example, not in every window arrangement).
 
-To use the toolbar with a mouse or trackpad, show it with a two-finger double tap on the screen. Changing pointer lock releases any held mouse buttons on the Mac without releasing held keyboard keys. If the app loses focus, both keyboard keys and mouse buttons are released to prevent stuck input. A pointer lock may also be released when the app loses focus; this is not necessarily a connection failure.
+To use the radial controls with a mouse or trackpad, show them with a two-finger double tap on the screen. Changing pointer lock releases any held mouse buttons on the Mac without releasing held keyboard keys. If the app loses focus, both keyboard keys and mouse buttons are released to prevent stuck input. A pointer lock may also be released when the app loses focus; this is not necessarily a connection failure.
 
 ### 8.2 Apple Pencil (iPad only)
 
@@ -401,13 +401,13 @@ On a compatible iPad, Apple Pencil is designed to provide direct pointer positio
 - Move the Pencil while in contact to drag.
 - Lift the Pencil to release the button.
 
-Disable Local pan before using the Pencil. This is basic pointer input, not a graphics-tablet integration with pressure, tilt or advanced Pencil gestures. Physical iPad and Apple Pencil compatibility has not yet been fully verified for version 1.0.
+Disable Local pan before using the Pencil. This is basic pointer input, not a graphics-tablet integration with pressure, tilt or advanced Pencil gestures. Physical iPad and Apple Pencil compatibility has not yet been fully verified for version 1.1.
 
 ## 9. End or resume a session
 
 ### 9.1 Disconnect
 
-Show the session toolbar if it is hidden (two-finger double tap), then tap or click **Close**. Vicinia ends the connection and returns to the home screen.
+Show the radial controls with a two-finger double tap, then tap or click **Close** (the red button). Vicinia ends the connection and returns to the home screen.
 
 Closing Vicinia's session is not the same as logging out of macOS, quitting Mac applications or shutting down the Mac. Save your work in the remote application and take any additional steps required to secure the Mac before disconnecting.
 
@@ -428,7 +428,7 @@ Vicinia can recover from certain temporary media or display interruptions. Durin
 
 If no new picture arrives, Vicinia may show a message indicating how long it has been waiting. The media watchdog is configured to end the session after 10 seconds without media; this is not a guarantee that all types of connection failure are detected within 10 seconds.
 
-Keep Vicinia in the foreground during important operations. Switching apps, locking your device or losing the network may interrupt or end the session. Advanced automatic reconnection and continuous background operation are not available in version 1.0. If necessary, reconnect manually.
+Keep Vicinia in the foreground during important operations. Switching apps, locking your device or losing the network may interrupt or end the session. Advanced automatic reconnection and continuous background operation are not available in version 1.1. If necessary, reconnect manually.
 
 ## 10. Security and privacy
 
@@ -447,7 +447,7 @@ No Vicinia account or cloud relay is required. Use only Macs you own or have exp
 | Password | Not retained for future logins; the password field is cleared when a connection is started. |
 | Host identity fingerprint | Stored in the device's Keychain for the entered host address. It is not a saved password. |
 
-There is no saved connection-profile list, automatic password login or Face ID-based connection unlocking in version 1.0.
+There is no saved connection-profile list, automatic password login or Face ID-based connection unlocking in version 1.1.
 
 ### 10.3 What to do if the Mac's identity changes
 
@@ -500,8 +500,8 @@ Pins are associated with the host string entered in the connection form. Using a
 | The desktop shows **Updating display…**. | Wait for the new display to become ready before interacting. |
 | The picture is frozen or a media warning appears. | Wait briefly, check Wi-Fi and the Mac's network connection, and reconnect if the session ends or remains unusable. |
 | Pointer or video feels slow. | Improve Wi-Fi signal, reduce competing network traffic, use Ethernet on the Mac if possible, and try Retina or Fit for easier interaction. Performance depends on the device, network and workload. |
-| The session toolbar is not visible. | Double-tap anywhere on the desktop with two fingers. With VoiceOver, use the **Show session toolbar** action. |
-| The toolbar covers part of the desktop. | Wait five seconds, start working on the Mac, or hide it with a two-finger double tap. |
+| The radial controls are not visible. | Double-tap anywhere on the desktop with two fingers. With VoiceOver, use the available session-control accessibility action. |
+| The radial controls cover part of the desktop. | Wait five seconds for auto-hide, tap the central **X**, tap outside the menu, or use a two-finger double tap. |
 
 ### 11.3 Input problems
 
@@ -510,18 +510,18 @@ Pins are associated with the host string entered in the connection form. Using a
 | Finger movements reposition the image instead of moving the pointer. | Disable **Local pan (one finger)**. |
 | Touching a control clicks elsewhere. | Check the input mode. Use **Direct** for position-based touch or move the pointer first in **Trackpad** mode. |
 | A one-finger swipe selects or drags items. | This is normal in Direct mode. Scroll with two fingers, or switch to Trackpad mode. |
-| The on-screen keyboard is missing. | Enable **Keyboard** in the session menu and select an editable field on the Mac. Check whether a physical keyboard is connected. |
+| The on-screen keyboard is missing. | Open **Retina → Keyboard** from the radial controls and select an editable field on the Mac. Check whether a physical keyboard is connected. |
 | A symbol, accent or shortcut does not work. | Check the Mac's keyboard layout. Use the accessory symbols or a physical keyboard where appropriate. Full Unicode entry and advanced virtual modifiers are not supported. |
 | Text or actions are missing after an input recovery notice. | Wait for input to return, inspect the result on the Mac and repeat only the missing input. |
-| A two-finger right-click appears slightly later than a one-finger click. | This is expected: Vicinia waits about a third of a second to distinguish it from the two-finger double tap that shows or hides the toolbar. |
-| The mouse or trackpad pointer cannot reach the toolbar. | Show the toolbar with a two-finger double tap on the screen: the pointer is released while the toolbar is visible. |
+| A two-finger right-click appears slightly later than a one-finger click. | This is expected: Vicinia waits about a third of a second to distinguish it from the two-finger double tap that shows or hides the radial controls. |
+| The mouse or trackpad pointer cannot reach the radial controls. | Show the radial controls with a two-finger double tap on the screen: the pointer is released while they are visible. |
 | A mouse, trackpad or Pencil is not responding. | Check its system connection, turn off Local pan, and return Vicinia to the foreground. Reconnect the session if needed. |
 
 ### 11.4 Report a problem
 
 When reporting an issue to the developer, include:
 
-- Vicinia version (1.0).
+- Vicinia version (1.1).
 - Your iPhone or iPad model and operating system version.
 - Your Mac model and macOS version.
 - Whether you use Wi-Fi, Ethernet or a combination.
@@ -537,13 +537,17 @@ Never include your macOS password. Redact private desktop content, host details 
 
 No. Vicinia uses the native macOS Screen Sharing service on a compatible Mac.
 
+### What changed in Vicinia 1.1?
+
+Version 1.1 replaces the previous floating toolbar with a **radial menu** containing **Retina**, **Fit** and **Close**, plus a central **X** that dismisses the menu without disconnecting. The **Retina** button opens the display, input, local pan and keyboard settings. The menu still opens with a **two-finger double tap** and hides automatically after **five seconds of inactivity**. The App Store controls no longer contain separate **Esc** or **HUD** buttons; the Escape key remains available through keyboard input.
+
 ### Is Vicinia a standard VNC client?
 
-No. Vicinia 1.0 uses Apple High Performance Screen Sharing and does not provide a standard VNC fallback.
+No. Vicinia 1.1 uses Apple High Performance Screen Sharing and does not provide a standard VNC fallback.
 
 ### Can I use Vicinia outside my home or office?
 
-Version 1.0 is designed and verified for reachable local networks. Internet access, relay services and dedicated VPN access workflows are not supported release features. Do not expose your Mac's Screen Sharing service directly to the Internet.
+Version 1.1 is designed and verified for reachable local networks. Internet access, relay services and dedicated VPN access workflows are not supported release features. Do not expose your Mac's Screen Sharing service directly to the Internet.
 
 ### Can I use my Mac while its physical display is off?
 
@@ -551,11 +555,11 @@ A physical monitor does not need to remain illuminated for a virtual-display ses
 
 ### Does Vicinia support audio from the Mac?
 
-No. Version 1.0 streams the remote desktop picture, not the Mac's audio.
+No. Version 1.1 streams the remote desktop picture, not the Mac's audio.
 
 ### Can I copy text from my iPhone and paste it on my Mac?
 
-Not through shared clipboard synchronization in Vicinia 1.0. Normal copy and paste within macOS remain available.
+Not through shared clipboard synchronization in Vicinia 1.1. Normal copy and paste within macOS remain available.
 
 ### Can I transfer files between my Mac and iPad or iPhone?
 
@@ -563,7 +567,7 @@ No. Dragging files within the remote Mac works as a normal macOS action, but int
 
 ### Can I save multiple Macs or log in using Face ID?
 
-No. Version 1.0 remembers the last address and user name and stores trusted host identities, but does not provide a connection-profile manager or biometric login with saved credentials.
+No. Version 1.1 remembers the last address and user name and stores trusted host identities, but does not provide a connection-profile manager or biometric login with saved credentials.
 
 ### Can I use Vicinia without a physical keyboard or mouse?
 
@@ -571,7 +575,7 @@ Yes, for basic pointing, clicking, scrolling, dragging and text entry. For exten
 
 ### Can I connect to several Macs at the same time?
 
-No. Vicinia 1.0 supports one active session and one remote virtual desktop at a time. Close the current session before connecting to another Mac.
+No. Vicinia 1.1 supports one active session and one remote virtual desktop at a time. Close the current session before connecting to another Mac.
 
 ### Can I use Vicinia with Windows or Linux?
 
@@ -579,7 +583,7 @@ No. Vicinia is a client for compatible Macs using Apple's native High Performanc
 
 ## 13. Current limitations
 
-Vicinia 1.0 focuses on the core remote desktop experience. The following are not included as supported features in this version:
+Vicinia 1.1 focuses on the core remote desktop experience. The following are not included as supported features in this version:
 
 - Automatic Mac discovery and saved connection profiles.
 - Face ID login and saved passwords for remote connections.
@@ -595,4 +599,4 @@ Physical verification of iPad and Apple Pencil compatibility, live host-name and
 
 ---
 
-**Vicinia 1.0** — Control your Mac from your iPhone or iPad using native High Performance Screen Sharing.
+**Vicinia 1.1** — Control your Mac from your iPhone or iPad using native High Performance Screen Sharing and radial immersive controls.
