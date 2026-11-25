@@ -53,6 +53,15 @@ enum RTCPBuild {
         return w.bytes
     }
 
+    /// LTRP acknowledgment: standalone RTCP APP, V=2 subtype 0,
+    /// PT 204, length 3 (16 bytes), sender = the client's video SSRC, the name
+    /// slot = the 32-bit value 5, then the confirmed DONL as a 32-bit value.
+    static func referenceAcknowledgment(sender: UInt32, donl: UInt16) -> [UInt8] {
+        var w = ByteWriter(capacity: 16)
+        w.u8(0x80); w.u8(204); w.u16(3); w.u32(sender); w.u32(5); w.u32(UInt32(donl))
+        return w.bytes
+    }
+
     /// (ssrc, middle 32 bits of NTP) for each SR in a compound RTCP packet.
     static func senderReports(_ p: Data) -> [(UInt32, UInt32)] {
         let b = [UInt8](p)

@@ -11,26 +11,6 @@
 		7A1C00000000000000000113 /* THIRD_PARTY_NOTICES.md in Resources */ = {isa = PBXBuildFile; fileRef = 7A1C00000000000000000111 /* THIRD_PARTY_NOTICES.md */; };
 /* End PBXBuildFile section */
 
-/* Begin PBXFileReference section */
-		7A1C00000000000000000101 /* ViciniaTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ViciniaTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-		7A1C00000000000000000001 /* Vicinia.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Vicinia.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		7A1C00000000000000000110 /* LICENSE */ = {isa = PBXFileReference; lastKnownFileType = text; path = LICENSE; sourceTree = "<group>"; };
-		7A1C00000000000000000111 /* THIRD_PARTY_NOTICES.md */ = {isa = PBXFileReference; lastKnownFileType = text; path = THIRD_PARTY_NOTICES.md; sourceTree = "<group>"; };
-/* End PBXFileReference section */
-
-/* Begin PBXFileSystemSynchronizedRootGroup section */
-		7A1C00000000000000000102 /* ViciniaTests */ = {
-			isa = PBXFileSystemSynchronizedRootGroup;
-			path = ViciniaTests;
-			sourceTree = "<group>";
-		};
-		7A1C00000000000000000002 /* Vicinia */ = {
-			isa = PBXFileSystemSynchronizedRootGroup;
-			path = Vicinia;
-			sourceTree = "<group>";
-		};
-/* End PBXFileSystemSynchronizedRootGroup section */
-
 /* Begin PBXContainerItemProxy section */
 		7A1C00000000000000000103 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -41,15 +21,35 @@
 		};
 /* End PBXContainerItemProxy section */
 
+/* Begin PBXFileReference section */
+		7A1C00000000000000000001 /* Vicinia.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Vicinia.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		7A1C00000000000000000101 /* ViciniaTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ViciniaTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		7A1C00000000000000000110 /* LICENSE */ = {isa = PBXFileReference; lastKnownFileType = text; path = LICENSE; sourceTree = "<group>"; };
+		7A1C00000000000000000111 /* THIRD_PARTY_NOTICES.md */ = {isa = PBXFileReference; lastKnownFileType = text; path = THIRD_PARTY_NOTICES.md; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		7A1C00000000000000000002 /* Vicinia */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = Vicinia;
+			sourceTree = "<group>";
+		};
+		7A1C00000000000000000102 /* ViciniaTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = ViciniaTests;
+			sourceTree = "<group>";
+		};
+/* End PBXFileSystemSynchronizedRootGroup section */
+
 /* Begin PBXFrameworksBuildPhase section */
-		7A1C00000000000000000104 /* Frameworks */ = {
+		7A1C00000000000000000003 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		7A1C00000000000000000003 /* Frameworks */ = {
+		7A1C00000000000000000104 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -82,6 +82,28 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		7A1C00000000000000000006 /* Vicinia */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 7A1C00000000000000000007 /* Build configuration list for PBXNativeTarget "Vicinia" */;
+			buildPhases = (
+				7A1C00000000000000000008 /* Sources */,
+				7A1C00000000000000000003 /* Frameworks */,
+				7A1C00000000000000000009 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				7A1C00000000000000000002 /* Vicinia */,
+			);
+			name = Vicinia;
+			packageProductDependencies = (
+			);
+			productName = Vicinia;
+			productReference = 7A1C00000000000000000001 /* Vicinia.app */;
+			productType = "com.apple.product-type.application";
+		};
 		7A1C00000000000000000105 /* ViciniaTests */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 7A1C00000000000000000106 /* Build configuration list for PBXNativeTarget "ViciniaTests" */;
@@ -104,28 +126,6 @@
 			productName = ViciniaTests;
 			productReference = 7A1C00000000000000000101 /* ViciniaTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
-		};
-		7A1C00000000000000000006 /* Vicinia */ = {
-			isa = PBXNativeTarget;
-			buildConfigurationList = 7A1C00000000000000000007 /* Build configuration list for PBXNativeTarget "Vicinia" */;
-			buildPhases = (
-				7A1C00000000000000000008 /* Sources */,
-				7A1C00000000000000000003 /* Frameworks */,
-				7A1C00000000000000000009 /* Resources */,
-			);
-			buildRules = (
-			);
-			dependencies = (
-			);
-			fileSystemSynchronizedGroups = (
-				7A1C00000000000000000002 /* Vicinia */,
-			);
-			name = Vicinia;
-			packageProductDependencies = (
-			);
-			productName = Vicinia;
-			productReference = 7A1C00000000000000000001 /* Vicinia.app */;
-			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
 
@@ -167,13 +167,6 @@
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
-		7A1C00000000000000000108 /* Resources */ = {
-			isa = PBXResourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 		7A1C00000000000000000009 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -183,17 +176,24 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		7A1C00000000000000000108 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
-		7A1C00000000000000000107 /* Sources */ = {
+		7A1C00000000000000000008 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		7A1C00000000000000000008 /* Sources */ = {
+		7A1C00000000000000000107 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -211,48 +211,6 @@
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
-		7A1C0000000000000000010A /* Debug */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				BUNDLE_LOADER = "$(TEST_HOST)";
-				HEADER_SEARCH_PATHS = "$(SRCROOT)/Vendor/ios-arm64/include";
-				"HEADER_SEARCH_PATHS[sdk=iphonesimulator*]" = "$(SRCROOT)/Vendor/iossim-arm64/include";
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = GJDF7BKBVD;
-				GENERATE_INFOPLIST_FILE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
-				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = it.danielebufarini.ViciniaTests;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SWIFT_STRICT_CONCURRENCY = complete;
-				SWIFT_VERSION = 6.0;
-				TARGETED_DEVICE_FAMILY = "1,2";
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Vicinia.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Vicinia";
-			};
-			name = Debug;
-		};
-		7A1C0000000000000000010B /* Release */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				BUNDLE_LOADER = "$(TEST_HOST)";
-				HEADER_SEARCH_PATHS = "$(SRCROOT)/Vendor/ios-arm64/include";
-				"HEADER_SEARCH_PATHS[sdk=iphonesimulator*]" = "$(SRCROOT)/Vendor/iossim-arm64/include";
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = GJDF7BKBVD;
-				GENERATE_INFOPLIST_FILE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
-				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = it.danielebufarini.ViciniaTests;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SWIFT_STRICT_CONCURRENCY = complete;
-				SWIFT_VERSION = 6.0;
-				TARGETED_DEVICE_FAMILY = "1,2";
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Vicinia.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Vicinia";
-			};
-			name = Release;
-		};
 		7A1C0000000000000000000C /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -302,19 +260,12 @@
 				ARCHS = arm64;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = GJDF7BKBVD;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_FILE = Config/Info.plist;
 				HEADER_SEARCH_PATHS = "$(SRCROOT)/Vendor/ios-arm64/include";
 				"HEADER_SEARCH_PATHS[sdk=iphonesimulator*]" = "$(SRCROOT)/Vendor/iossim-arm64/include";
-				LIBRARY_SEARCH_PATHS = "$(SRCROOT)/Vendor/ios-arm64/lib";
-				"LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*]" = "$(SRCROOT)/Vendor/iossim-arm64/lib";
-				OTHER_LDFLAGS = (
-					"-lcrypto",
-					"-lsrtp2",
-				);
-				SWIFT_OBJC_BRIDGING_HEADER = "Vicinia/Support/Vicinia-Bridging-Header.h";
+				INFOPLIST_FILE = Config/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Vicinia;
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Vicinia connects directly to the Mac you choose on your local network to show and control its screen.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -326,12 +277,19 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.1;
+				LIBRARY_SEARCH_PATHS = "$(SRCROOT)/Vendor/ios-arm64/lib";
+				"LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*]" = "$(SRCROOT)/Vendor/iossim-arm64/lib";
+				MARKETING_VERSION = 1.1.1;
+				OTHER_LDFLAGS = (
+					"-lcrypto",
+					"-lsrtp2",
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = it.danielebufarini.vicinia;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;
 				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_OBJC_BRIDGING_HEADER = "Vicinia/Support/Vicinia-Bridging-Header.h";
 				SWIFT_STRICT_CONCURRENCY = complete;
 				SWIFT_VERSION = 6.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -344,19 +302,12 @@
 				ARCHS = arm64;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = GJDF7BKBVD;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_FILE = Config/Info.plist;
 				HEADER_SEARCH_PATHS = "$(SRCROOT)/Vendor/ios-arm64/include";
 				"HEADER_SEARCH_PATHS[sdk=iphonesimulator*]" = "$(SRCROOT)/Vendor/iossim-arm64/include";
-				LIBRARY_SEARCH_PATHS = "$(SRCROOT)/Vendor/ios-arm64/lib";
-				"LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*]" = "$(SRCROOT)/Vendor/iossim-arm64/lib";
-				OTHER_LDFLAGS = (
-					"-lcrypto",
-					"-lsrtp2",
-				);
-				SWIFT_OBJC_BRIDGING_HEADER = "Vicinia/Support/Vicinia-Bridging-Header.h";
+				INFOPLIST_FILE = Config/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Vicinia;
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Vicinia connects directly to the Mac you choose on your local network to show and control its screen.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -368,30 +319,70 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.1;
+				LIBRARY_SEARCH_PATHS = "$(SRCROOT)/Vendor/ios-arm64/lib";
+				"LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*]" = "$(SRCROOT)/Vendor/iossim-arm64/lib";
+				MARKETING_VERSION = 1.1.1;
+				OTHER_LDFLAGS = (
+					"-lcrypto",
+					"-lsrtp2",
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = it.danielebufarini.vicinia;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;
 				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_OBJC_BRIDGING_HEADER = "Vicinia/Support/Vicinia-Bridging-Header.h";
 				SWIFT_STRICT_CONCURRENCY = complete;
 				SWIFT_VERSION = 6.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Release;
 		};
+		7A1C0000000000000000010A /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = GJDF7BKBVD;
+				GENERATE_INFOPLIST_FILE = YES;
+				HEADER_SEARCH_PATHS = "$(SRCROOT)/Vendor/ios-arm64/include";
+				"HEADER_SEARCH_PATHS[sdk=iphonesimulator*]" = "$(SRCROOT)/Vendor/iossim-arm64/include";
+				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = it.danielebufarini.ViciniaTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Vicinia.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Vicinia";
+			};
+			name = Debug;
+		};
+		7A1C0000000000000000010B /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = GJDF7BKBVD;
+				GENERATE_INFOPLIST_FILE = YES;
+				HEADER_SEARCH_PATHS = "$(SRCROOT)/Vendor/ios-arm64/include";
+				"HEADER_SEARCH_PATHS[sdk=iphonesimulator*]" = "$(SRCROOT)/Vendor/iossim-arm64/include";
+				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = it.danielebufarini.ViciniaTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Vicinia.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Vicinia";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		7A1C00000000000000000106 /* Build configuration list for PBXNativeTarget "ViciniaTests" */ = {
-			isa = XCConfigurationList;
-			buildConfigurations = (
-				7A1C0000000000000000010A /* Debug */,
-				7A1C0000000000000000010B /* Release */,
-			);
-			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Release;
-		};
 		7A1C00000000000000000007 /* Build configuration list for PBXNativeTarget "Vicinia" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
@@ -406,6 +397,15 @@
 			buildConfigurations = (
 				7A1C0000000000000000000C /* Debug */,
 				7A1C0000000000000000000D /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		7A1C00000000000000000106 /* Build configuration list for PBXNativeTarget "ViciniaTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				7A1C0000000000000000010A /* Debug */,
+				7A1C0000000000000000010B /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

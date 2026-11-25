@@ -36,6 +36,9 @@ final class MediaTransport: @unchecked Sendable {
         var srtpAuthFailures = 0, srtpReplays = 0, srtpOtherErrors = 0, srtcpFailures = 0
         var audioDiscarded = 0, nonHEVCVideo = 0, bufferedBeforeResolution = 0, bufferOverflow = 0
         var rctlSent = 0, rrSent = 0, heartbeatsSent = 0, firSent = 0, sendErrors = 0
+        #if DEBUG || VICINIA_MEASUREMENT_TOOLS
+        var ltrpAcksSent = 0, ltrpAckFailures = 0
+        #endif
         var mediaStalls = 0                   // silences long enough to be shown
         var longestSilenceNanos: UInt64 = 0   // longest gap between authenticated datagrams
         var longestUnshownNanos: UInt64 = 0   // longest span of arriving pictures without a presentation
@@ -67,6 +70,7 @@ final class MediaTransport: @unchecked Sendable {
     private var heartbeatSeq: UInt16 = 0, heartbeatTS: UInt32 = 0
     private var ticks = 0
     private var offerID: UInt64 = 0
+    private var configuredOffer: UInt64?
     private var timers: [DispatchSourceTimer] = []
     private var stopped = false
     /// Media queue. Reports stalls, resumption and the bounded loss of media.
@@ -84,6 +88,10 @@ final class MediaTransport: @unchecked Sendable {
     private var dropWindows: [(start: UInt64, end: UInt64)] = []
     #endif
     private(set) var counters = Counters()
+    #if DEBUG
+    /// Tests only: each LTRP acknowledgment as built and as protected for the video leg.
+    var onReferenceAcknowledgmentSent: (([UInt8], Data) -> Void)?
+    #endif
     static let localAudioPort: UInt16 = 5900, localVideoPort: UInt16 = 5901
     static let maxPendingPackets = 8192
     static let firMinIntervalNanos: UInt64 = 500_000_000
@@ -126,7 +134,13 @@ final class MediaTransport: @unchecked Sendable {
     /// pipeline's assembly/decoder state) carries over.
     func configure(keys: MediaKeys, videoSSRC: UInt32, audioSSRC: UInt32, offerID: UInt64 = 0) throws {
         dispatchPrecondition(condition: .onQueue(queue))
+        guard !stopped else { return }
         suspend()
+        let inboundVideo = try SRTPSession(keySalt: keys.videoFromHost, inbound: true)
+        let inboundAudio = try SRTPSession(keySalt: keys.audioFromHost, inbound: true)
+        let outboundVideo = try SRTPSession(keySalt: keys.videoToHost, inbound: false)
+        let outboundAudio = try SRTPSession(keySalt: keys.audioToHost, inbound: false)
+        configuredOffer = offerID
         self.offerID = offerID
         stripeOf = nil
         canvasReady = false
@@ -141,13 +155,34 @@ final class MediaTransport: @unchecked Sendable {
         heartbeatSeq = 0; heartbeatTS = 0
         ticks = 0
         pipeline.updateStripeMap([:])
-        pipeline.resetStream()
-        videoIn = try SRTPSession(keySalt: keys.videoFromHost, inbound: true)
-        audioIn = try SRTPSession(keySalt: keys.audioFromHost, inbound: true)
-        videoOut = try SRTPSession(keySalt: keys.videoToHost, inbound: false)
-        audioOut = try SRTPSession(keySalt: keys.audioToHost, inbound: false)
+        pipeline.resetStream()                  // `suspend` above also turned LTRP acknowledgments off until this offer's answer
+        pipeline.onReferenceAcknowledgment = { [weak self] donl in self?.sendReferenceAcknowledgment(donl: donl) }
+        videoIn = inboundVideo; audioIn = inboundAudio
+        videoOut = outboundVideo; audioOut = outboundAudio
         ourVideoSSRC = videoSSRC
         ourAudioSSRC = audioSSRC
+    }
+
+    /// Applies this offer's video answer before `canvasKnown` releases buffered packets.
+    /// The standard build acknowledges references when HEVC and LTRP are negotiated.
+    func referenceAcknowledgments(answer: LTRPNegotiation, codec: VideoCodec, offerID: UInt64,
+                                  defaults: UserDefaults? = nil) {
+        dispatchPrecondition(condition: .onQueue(queue))
+        guard !stopped, configuredOffer == offerID else { return }
+        let negotiated = ReferenceAcknowledgment.gate(answer: answer, codec: codec)
+        #if (DEBUG && VICINIA_DEVELOPER_TOOLS) || VICINIA_MEASUREMENT_TOOLS
+        let control = ReferenceAcknowledgmentControl(launchValue: (defaults ?? .standard).string(forKey: "ltrp-ack"))
+        let active = negotiated && control == .on
+        #else
+        let active = negotiated
+        #endif
+        pipeline.setReferenceAcknowledgments(active: active)
+        #if (DEBUG && VICINIA_DEVELOPER_TOOLS) || VICINIA_MEASUREMENT_TOOLS
+        evidence.set([
+            "ltrp.answer": answer.description, "ltrp.answer.offer\(offerID)": answer.description,
+            "ltrp.control": control.rawValue, "ltrp.codec": codec.rawValue, "ltrp.active": "\(active)",
+        ])
+        #endif
     }
 
     func canvasKnown(width: Int, height: Int, geometry: DesktopGeometry? = nil, offerID: UInt64 = 0) {
@@ -188,6 +223,8 @@ final class MediaTransport: @unchecked Sendable {
         timers = []
         pipeline.stopPolling()
         pipeline.resetStream()
+        pipeline.setReferenceAcknowledgments(active: false)
+        configuredOffer = nil
         videoIn = nil; audioIn = nil; videoOut = nil; audioOut = nil
         pending = []; stripeOf = nil; seenSSRCs = [:]; canvasReady = false
     }
@@ -195,6 +232,7 @@ final class MediaTransport: @unchecked Sendable {
     func stop() {
         dispatchPrecondition(condition: .onQueue(queue))
         stopped = true
+        configuredOffer = nil
         for t in timers { t.cancel() }
         timers = []
         pipeline.stopPolling()
@@ -203,6 +241,8 @@ final class MediaTransport: @unchecked Sendable {
         videoIn = nil; audioIn = nil; videoOut = nil; audioOut = nil
         pipeline.onRecoveryNeeded = nil
         pipeline.onFailure = nil
+        pipeline.setReferenceAcknowledgments(active: false)
+        pipeline.onReferenceAcknowledgment = nil
         onLiveness = nil
         #if (DEBUG && VICINIA_DEVELOPER_TOOLS) || VICINIA_MEASUREMENT_TOOLS
         publishEvidence()
@@ -428,6 +468,25 @@ final class MediaTransport: @unchecked Sendable {
         counters.rctlSent += 1
     }
 
+    /// Sends one SRTCP-protected LTRP acknowledgment on the video leg.
+    private func sendReferenceAcknowledgment(donl: UInt16) {
+        guard let videoOut else { return }
+        let pkt = RTCPBuild.referenceAcknowledgment(sender: ourVideoSSRC, donl: donl)
+        guard let protected = try? videoOut.protectRTCP(pkt) else {
+            #if DEBUG || VICINIA_MEASUREMENT_TOOLS
+            counters.ltrpAckFailures += 1
+            #endif
+            return
+        }
+        #if DEBUG
+        onReferenceAcknowledgmentSent?(pkt, protected)
+        #endif
+        send(protected, on: videoConnection)
+        #if DEBUG || VICINIA_MEASUREMENT_TOOLS
+        counters.ltrpAcksSent += 1
+        #endif
+    }
+
     private func tick() {
         ticks += 1
         let now = DispatchTime.now().uptimeNanoseconds
@@ -489,6 +548,7 @@ final class MediaTransport: @unchecked Sendable {
     /// Value snapshot here; formatting on the evidence queue.
     func publishEvidence() {
         let c = counters, delay = rctl.delaySeconds
+        let ack = pipeline.referenceAcknowledgmentState
         evidence.deferred { log in
         var mbps = "n/a"
         if let first = c.firstVideoNanos, c.lastVideoNanos > first {
@@ -511,6 +571,8 @@ final class MediaTransport: @unchecked Sendable {
             "feedback.heartbeatsSent": "\(c.heartbeatsSent)", "feedback.firSent": "\(c.firSent)",
             "feedback.sendErrors": "\(c.sendErrors)",
             "feedback.rctlDelayMs": String(format: "%.2f", delay * 1000),
+            "feedback.ltrpAcksSent": "\(c.ltrpAcksSent)", "feedback.ltrpAckFailures": "\(c.ltrpAckFailures)",
+            "ltrp.state": "active \(ack.active) noted \(ack.counters.noted) superseded \(ack.counters.superseded) dropped \(ack.counters.dropped) taken \(ack.counters.taken)",
         ])
         }
     }

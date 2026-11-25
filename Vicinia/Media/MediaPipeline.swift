@@ -107,6 +107,9 @@ final class MediaPipeline: @unchecked Sendable {
     var onRecoveryNeeded: ((Int) -> Void)?
     /// Recovery was given up (bounded): the session must end with this readable reason.
     var onFailure: ((String) -> Void)?
+    /// Live transport callback: sends the LTRP acknowledgment for this stripe-0 DONL.
+    var onReferenceAcknowledgment: ((UInt16) -> Void)?
+    private var referenceAcknowledgment = ReferenceAcknowledgment()
     private var recovery = RecoveryRetry()
     private var rebuildPolicy = DecoderRebuildPolicy()
     private var lastRandomAccessTimestamp: UInt32?
@@ -188,6 +191,33 @@ final class MediaPipeline: @unchecked Sendable {
     func ingest(_ packet: Data, arrival: UInt64) {
         dispatchPrecondition(condition: .onQueue(queue))
         for output in assembler.ingest(packet, arrivalNanos: arrival) { handle(output, now: arrival) }
+        flushReferenceAcknowledgment()
+    }
+
+    /// LTRP acknowledgments for the current offer, as negotiated by the transport.
+    /// Applying the decision drops any pending acknowledgment.
+    func setReferenceAcknowledgments(active: Bool) {
+        dispatchPrecondition(condition: .onQueue(queue))
+        referenceAcknowledgment.activate(active)
+    }
+
+    #if DEBUG || VICINIA_MEASUREMENT_TOOLS
+    var referenceAcknowledgmentState: (active: Bool, counters: ReferenceAcknowledgment.Counters) {
+        dispatchPrecondition(condition: .onQueue(queue))
+        return (referenceAcknowledgment.active, referenceAcknowledgment.counters)
+    }
+    #endif
+
+    /// An access unit handed to the decoder (`submit`): only stripe 0 with a DONL can be confirmed.
+    func noteHandedToDecoding(stripe: Int, donl: UInt16?) {
+        dispatchPrecondition(condition: .onQueue(queue))
+        referenceAcknowledgment.handedToDecoding(stripe: stripe, donl: donl)
+    }
+
+    /// End of one batch of media work (one datagram, one poll): at most one acknowledgment, the newest.
+    private func flushReferenceAcknowledgment() {
+        guard let donl = referenceAcknowledgment.take() else { return }
+        onReferenceAcknowledgment?(donl)
     }
 
     /// Expires assembler gaps/markers and decode-order gaps and closes settled
@@ -210,6 +240,7 @@ final class MediaPipeline: @unchecked Sendable {
             counters.update { $0.recoveryGiveUps += 1 }
             onFailure?("no random-access picture from the Mac for \(RecoveryRetry.limitNanos / 1_000_000_000) s after a media loss")
         }
+        flushReferenceAcknowledgment()
     }
 
     /// Live path: drives `poll` on this serial queue even when no packet arrives.
@@ -260,6 +291,7 @@ final class MediaPipeline: @unchecked Sendable {
         vps = nil; sps = nil; pps = [:]
         assembler.reset()
         order.reset()
+        referenceAcknowledgment.drop()
         openUpdate = nil
         #if (DEBUG && VICINIA_DEVELOPER_TOOLS) || VICINIA_MEASUREMENT_TOOLS
         lastSubmitted = nil
@@ -354,6 +386,7 @@ final class MediaPipeline: @unchecked Sendable {
     /// access point; the update being submitted can no longer be coherent.
     private func beginRecovery(stripe: Int, now: UInt64) {
         awaitingRandomAccess = true
+        referenceAcknowledgment.drop()          // the host must not keep a reference the client lost
         abandonOpenUpdate()
         counters.update { $0.recoveryRequests += 1 }
         recovery.begin(now: now)
@@ -461,6 +494,9 @@ final class MediaPipeline: @unchecked Sendable {
         #endif
         openUpdate = au.stripe == stripeCount - 1 ? nil : (au.rtpTimestamp, now)
         if openUpdate != nil { armSettleCheck(lastSubmit: now) }
+        // Confirmed on hand-over to the decoder; a decode failure
+        // arrives later on this queue and begins recovery (FIR) as for any other loss.
+        noteHandedToDecoding(stripe: au.stripe, donl: au.donl)
         decoder.decode(au, vclNALs: vcl, now: DispatchTime.now().uptimeNanoseconds)
     }
 
@@ -470,6 +506,7 @@ final class MediaPipeline: @unchecked Sendable {
         decoder?.invalidate()
         decoder = nil
         awaitingRandomAccess = true
+        referenceAcknowledgment.drop()          // a unit handed to the retired decoder generation is not confirmed
         openUpdate = nil
         let sets = [vps, sps] + pps.keys.sorted().compactMap { pps[$0] }
         let parsed: HEVCSequenceParameters

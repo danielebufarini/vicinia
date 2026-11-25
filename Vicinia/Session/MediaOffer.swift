@@ -164,6 +164,49 @@ struct MediaOffer {
         return nil
     }
 
+    /// Byte ranges of the audio, video and second-video negotiator blobs of an
+    /// answer (media-stream message 2): their big-endian lengths are at offsets
+    /// 8, 10 and 12 of the message, the blobs follow from offset 18 in that order.
+    static func answerBlobs(_ body: [UInt8]) -> (audio: Range<Int>, video: Range<Int>, video2: Range<Int>)? {
+        guard body.count >= 18, body[0] == 0, body[1] == 2 else { return nil }
+        let a = Int(body[8]) << 8 | Int(body[9]), v = Int(body[10]) << 8 | Int(body[11])
+        let v2 = Int(body[12]) << 8 | Int(body[13])
+        guard 18 + a + v + v2 <= body.count else { return nil }
+        return (18 ..< 18 + a, 18 + a ..< 18 + a + v, 18 + a + v ..< 18 + a + v + v2)
+    }
+
+    /// LTRP flag of the video answer only (field 7 of the first field-5 stream
+    /// description of the video blob); the audio and second-video blobs are never read.
+    static func videoLTRP(inAnswer body: [UInt8]) -> LTRPNegotiation {
+        guard let blobs = answerBlobs(body) else { return .unparseable("answer layout") }
+        let blob = Array(body[blobs.video])
+        guard !blob.isEmpty else { return .absent("empty video answer") }
+        let compressed: [UInt8]
+        if blob.starts(with: Array("bplist".utf8)) {
+            guard let dict = try? PropertyListSerialization.propertyList(from: Data(blob), format: nil) as? [String: Any],
+                  let data = dict["avcMediaStreamNegotiatorMediaBlob"] as? Data else {
+                return .unparseable("video property list")
+            }
+            compressed = [UInt8](data)
+        } else {
+            compressed = blob                       // bare negotiator blob (offer without endpoint information)
+        }
+        guard let pb = try? zlibDecompress(compressed, limit: 1 << 20) else { return .unparseable("video negotiator blob") }
+        var it = ProtoIterator(pb), stream: [UInt8]?
+        while let (field, wire, _, bytes) = it.next() {
+            if field == 5, wire == 2, stream == nil { stream = bytes }
+        }
+        guard it.isAtEnd else { return .unparseable("video negotiator protobuf") }
+        guard let stream else { return .absent("no video stream description") }
+        var sub = ProtoIterator(stream), ltrp: UInt64?
+        while let (field, wire, value, _) = sub.next() {
+            if field == 7, wire == 0, ltrp == nil { ltrp = value }
+        }
+        guard sub.isAtEnd else { return .unparseable("video stream description") }
+        guard let ltrp else { return .absent("no field 5.7") }
+        return ltrp != 0 ? .enabled : .disabled
+    }
+
     private static func firstIndex(of needle: [UInt8], in hay: [UInt8], from: Int) -> Int? {
         guard needle.count <= hay.count else { return nil }
         var i = from
@@ -180,6 +223,8 @@ struct ProtoIterator {
     private let b: [UInt8]
     private var i = 0
     init(_ b: [UInt8]) { self.b = b }
+    /// After `next()` returned nil: true when every byte was consumed (not malformed).
+    var isAtEnd: Bool { i >= b.count }
 
     private mutating func varint() -> UInt64? {
         var v: UInt64 = 0, shift: UInt64 = 0
@@ -192,7 +237,14 @@ struct ProtoIterator {
         return nil
     }
 
+    /// A field that cannot be read leaves the position at its start (so `isAtEnd` is false).
     mutating func next() -> (UInt64, UInt64, UInt64, [UInt8]?)? {
+        let start = i
+        guard let field = nextField() else { i = start; return nil }
+        return field
+    }
+
+    private mutating func nextField() -> (UInt64, UInt64, UInt64, [UInt8]?)? {
         guard i < b.count, let tag = varint() else { return nil }
         let field = tag >> 3, wire = tag & 7
         switch wire {

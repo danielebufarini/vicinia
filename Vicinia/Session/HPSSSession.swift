@@ -63,6 +63,8 @@ actor HPSSSession {
     private let trust: @Sendable (String, String) async -> Bool
     private var records: RecordLayer?
     private var transport: MediaTransport?
+    /// LTRP flag of the latest video answer, paired with the offer it answers.
+    private var answerLTRP: (offer: UInt64, value: LTRPNegotiation)?
     private var pending: [UInt8] = []
     private(set) var phase: SessionPhase = .idle
     private var layout: DisplayLayout?
@@ -475,7 +477,10 @@ actor HPSSSession {
         offeredGeometry = geometry
         let offerID = currentOffer
         enter(.awaitingRandomAccess, "canvas \(cw)x\(ch)")
+        let ltrp = answerLTRP.flatMap { $0.offer == offerID ? $0.value : nil } ?? .absent("no answer for this offer")
         await onMediaQueue {
+            // The video leg carries HEVC only: MediaTransport drops every other payload type.
+            transport.referenceAcknowledgments(answer: ltrp, codec: .hevc, offerID: offerID)
             transport.canvasKnown(width: cw, height: ch, geometry: geometry, offerID: offerID)
             transport.startFeedback()
         }
@@ -503,6 +508,11 @@ actor HPSSSession {
                     answered = true
                     if let c = MediaOffer.canvas(inAnswer: mm.body) { answerCanvas = (c.0, c.1) }
                     evidence.set("media.answer", "\(mm.summary) canvas=\(answerCanvas.map { "\($0.0)x\($0.1)" } ?? "absent")")
+                    let ltrp = MediaOffer.videoLTRP(inAnswer: mm.body)       // video blob only, by the answer's lengths
+                    answerLTRP = (currentOffer, ltrp)
+                    #if (DEBUG && VICINIA_DEVELOPER_TOOLS) || VICINIA_MEASUREMENT_TOOLS
+                    evidence.set("media.answer.ltrp", ltrp.description)
+                    #endif
                 }
             }
             if answered {
