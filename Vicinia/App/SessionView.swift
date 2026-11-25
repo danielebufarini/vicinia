@@ -16,7 +16,7 @@ struct SessionView: View {
     #endif
 
     private static let hintTitle: LocalizedStringResource = "Double-tap with two fingers"
-    private static let hintMessage: LocalizedStringResource = "Show or hide the session toolbar at any time."
+    private static let hintMessage: LocalizedStringResource = "Show or hide the session controls at any time."
 
     /// Overlay-only transition: the desktop surface never moves or resizes.
     private func transition(from edge: Edge) -> AnyTransition {
@@ -84,6 +84,27 @@ struct SessionView: View {
             .allowsHitTesting(false)
         }
         .overlay {
+            SessionRadialControlsOverlay(controller: controller, onClose: onClose)
+        }
+        #if DEBUG && VICINIA_DEVELOPER_TOOLS
+        .overlay(alignment: .topLeading) {
+            ZStack {
+                if controller.toolbar.isVisible {
+                    Button(showHUD ? "Hide HUD" : "HUD") {
+                        controller.toolbar.controlUsed()
+                        showHUD.toggle()
+                    }
+                    .font(.caption.weight(.semibold))
+                    .padding(.horizontal, 12).padding(.vertical, 8)
+                    .glassEffect(.regular, in: .capsule)
+                    .padding(8)
+                    .transition(transition(from: .top))
+                }
+            }
+            .animation(overlayAnimation, value: controller.toolbar.isVisible)
+        }
+        #endif
+        .overlay {
             if source.live != nil, let title = controller.terminalTitle {
                 VStack(spacing: 10) {
                     Text(title).font(.headline)
@@ -94,14 +115,6 @@ struct SessionView: View {
                 .frame(maxWidth: 420)
                 .background(.regularMaterial, in: .rect(cornerRadius: 14))
             }
-        }
-        .overlay(alignment: .topTrailing) {
-            ZStack {
-                if controller.toolbar.isVisible {
-                    toolbar.transition(transition(from: .top))
-                }
-            }
-            .animation(overlayAnimation, value: controller.toolbar.isVisible)
         }
         .sheet(item: Bindable(controller).trustPrompt) { prompt in
             HostKeyVerificationView(prompt: prompt) { controller.resolveTrust($0) }
@@ -119,171 +132,6 @@ struct SessionView: View {
         }
         .onChange(of: controller.toolbar.prefersPointerLock, initial: true) { _, locked in onPointerLockPreference(locked) }
         .onDisappear { controller.stop() }
-    }
-
-    /// Floating, on-demand session controls. Hidden, they leave the hierarchy:
-    /// no touch target, accessibility element or visual affordance remains.
-    private var toolbar: some View {
-        HStack(spacing: 8) {
-            SessionMenuButton(controller: controller)
-            ToolbarButton(title: String(localized: "Esc"), hint: String(localized: "Sends Escape to the Mac."),
-                          toolbar: controller.toolbar) { controller.escape() }
-            ToolbarButton(title: String(localized: "Fit"), hint: String(localized: "Shows the whole remote desktop."),
-                          toolbar: controller.toolbar) { controller.fit() }
-            #if (DEBUG && VICINIA_DEVELOPER_TOOLS) || VICINIA_MEASUREMENT_TOOLS
-            ToolbarButton(title: showHUD ? "Hide HUD" : "HUD", hint: "", toolbar: controller.toolbar) { showHUD.toggle() }
-            #endif
-            ToolbarButton(title: String(localized: "Close"), hint: String(localized: "Ends the session."),
-                          toolbar: controller.toolbar, action: onClose)
-        }
-        .padding(8)
-        .allowsHitTesting(controller.toolbar.isVisible) // also while the removal transition runs
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("Session toolbar")
-        .accessibilityHidden(!controller.toolbar.isVisible)
-    }
-}
-
-/// A native Liquid Glass toolbar control. Every toolbar item is a UIKit glass
-/// button because `UIControl` reports the whole press (touch, mouse or
-/// trackpad: touch-down to touch-up or cancel), while SwiftUI's glass button
-/// styles report neither presses nor, for `Menu`, its opening; automatic
-/// dismissal must wait for both, without adding any gesture recognizer.
-class SessionToolbarControl: UIButton {
-    private(set) weak var toolbar: SessionToolbar?
-    private var isPressing = false {
-        didSet { if oldValue != isPressing { toolbar?.setControlPressed(isPressing, control: ObjectIdentifier(self)) } }
-    }
-
-    init(toolbar: SessionToolbar?) {
-        self.toolbar = toolbar
-        super.init(frame: .zero)
-        var configuration = UIButton.Configuration.prominentGlass()
-        configuration.buttonSize = .small
-        self.configuration = configuration
-        isPointerInteractionEnabled = true
-        addAction(UIAction { [weak self] _ in self?.isPressing = true }, for: .touchDown)
-        addAction(UIAction { [weak self] _ in self?.isPressing = false }, for: [.touchUpInside, .touchUpOutside, .touchCancel])
-    }
-    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
-
-    override func didMoveToWindow() {
-        super.didMoveToWindow()
-        if window == nil { isPressing = false } // a removed control never keeps a press
-    }
-
-    /// Hidden toolbar (also while its removal animates): touches and clicks
-    /// pass through to the desktop.
-    override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
-        toolbar?.isVisible != false && super.point(inside: point, with: event)
-    }
-}
-
-/// Esc, Fit, Close (and HUD in diagnostic builds).
-final class SessionActionButton: SessionToolbarControl {
-    var action: () -> Void = {}
-
-    override init(toolbar: SessionToolbar?) {
-        super.init(toolbar: toolbar)
-        addAction(UIAction { [weak self] _ in
-            self?.toolbar?.controlUsed()
-            self?.action()
-        }, for: .primaryActionTriggered)
-    }
-    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
-}
-
-private struct ToolbarButton: UIViewRepresentable {
-    let title: String
-    let hint: String
-    let toolbar: SessionToolbar
-    let action: () -> Void
-
-    func makeUIView(context: Context) -> SessionActionButton { SessionActionButton(toolbar: toolbar) }
-
-    func updateUIView(_ button: SessionActionButton, context: Context) {
-        button.action = action
-        if button.configuration?.title != title { button.configuration?.title = title }
-        button.accessibilityHint = hint.isEmpty ? nil : hint
-    }
-
-    func sizeThatFits(_ proposal: ProposedViewSize, uiView: SessionActionButton, context: Context) -> CGSize? {
-        uiView.intrinsicContentSize
-    }
-}
-
-/// The session menu (display mode, local pan, input mode, keyboard): UIKit
-/// reports when the menu opens and closes, which SwiftUI's `Menu` does not.
-private struct SessionMenuButton: UIViewRepresentable {
-    let controller: SessionController
-
-    func makeUIView(context: Context) -> SessionMenuControl { SessionMenuControl(controller: controller) }
-
-    func updateUIView(_ button: SessionMenuControl, context: Context) { button.refresh() }
-
-    func sizeThatFits(_ proposal: ProposedViewSize, uiView: SessionMenuControl, context: Context) -> CGSize? {
-        uiView.intrinsicContentSize
-    }
-}
-
-final class SessionMenuControl: SessionToolbarControl {
-    private weak var controller: SessionController?
-    private var shown: (profile: DisplayProfile, pan: Bool, trackpad: Bool, keyboard: Bool)?
-
-    init(controller: SessionController) {
-        self.controller = controller
-        super.init(toolbar: controller.toolbar)
-        showsMenuAsPrimaryAction = true
-        accessibilityHint = String(localized: "Opens display, input and keyboard options.")
-        refresh()
-    }
-    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
-
-    /// Title and menu follow the controller (observed through `updateUIView`).
-    /// Unrelated view updates never replace a menu that may be open.
-    func refresh() {
-        guard let c = controller else { return }
-        let state = (profile: c.profile, pan: c.panEnabled, trackpad: c.trackpad, keyboard: c.keyboardShown)
-        if let shown, shown == state { return }
-        shown = state
-        configuration?.title = c.profile.rawValue
-        let used: @MainActor () -> Void = { [weak c] in c?.toolbar.controlUsed() }
-        let profiles = DisplayProfile.allCases.map { profile in
-            UIAction(title: profile.rawValue) { [weak c] _ in used(); c?.setProfile(profile) }
-        }
-        let pan = UIAction(title: String(localized: "Local pan (one finger)"), state: c.panEnabled ? .on : .off) { [weak c] _ in
-            used(); c?.panEnabled.toggle()
-        }
-        let input = UIMenu(title: String(localized: "Input"),
-                           subtitle: c.trackpad ? String(localized: "Trackpad") : String(localized: "Direct"),
-                           options: .singleSelection, children: [
-            UIAction(title: String(localized: "Trackpad"), state: c.trackpad ? .on : .off) { [weak c] _ in used(); c?.trackpad = true },
-            UIAction(title: String(localized: "Direct"), state: c.trackpad ? .off : .on) { [weak c] _ in used(); c?.trackpad = false },
-        ])
-        let keyboard = UIAction(title: String(localized: "Keyboard"), state: c.keyboardShown ? .on : .off) { [weak c] _ in
-            used(); c?.keyboardShown.toggle()
-        }
-        menu = UIMenu(children: profiles + [pan, input, keyboard])
-    }
-
-    override func contextMenuInteraction(_ interaction: UIContextMenuInteraction, willDisplayMenuFor configuration: UIContextMenuConfiguration,
-                                         animator: (any UIContextMenuInteractionAnimating)?) {
-        super.contextMenuInteraction(interaction, willDisplayMenuFor: configuration, animator: animator)
-        controller?.toolbar.setMenuOpen(true)
-    }
-
-    override func contextMenuInteraction(_ interaction: UIContextMenuInteraction, willEndFor configuration: UIContextMenuConfiguration,
-                                         animator: (any UIContextMenuInteractionAnimating)?) {
-        super.contextMenuInteraction(interaction, willEndFor: configuration, animator: animator)
-        controller?.toolbar.setMenuOpen(false)
-    }
-
-    /// The toolbar appeared: VoiceOver moves to its first control.
-    override func didMoveToWindow() {
-        super.didMoveToWindow()
-        if window != nil, UIAccessibility.isVoiceOverRunning {
-            UIAccessibility.post(notification: .layoutChanged, argument: self)
-        }
     }
 }
 

@@ -25,6 +25,10 @@ final class SessionToolbar {
     /// Pinned while connecting and after the session ended, so Close is always
     /// reachable; on demand while the session is established.
     private(set) var isVisible = true
+    /// Optional activation point (window coordinates) from the two-finger double
+    /// tap that opened the radial controls; `nil` uses the default placement.
+    /// Kept across hiding so the dismissal animation finishes in place.
+    private(set) var anchorPoint: CGPoint?
     private(set) var showsHint = false
     /// Pointer lock is requested only while immersive. The system pointer stays
     /// local while the toolbar is visible, so a mouse or trackpad can operate
@@ -32,7 +36,7 @@ final class SessionToolbar {
     /// held, so no press is split between the local and the locked pointer. A
     /// remote press never releases the lock.
     private(set) var prefersPointerLock = false
-    @ObservationIgnored private(set) var stage = Stage.pending
+    private(set) var stage = Stage.pending
     /// The session menu is open: dismissing would close it under the user.
     @ObservationIgnored private(set) var isMenuOpen = false
     /// Toolbar controls currently pressed (touch, mouse or trackpad).
@@ -71,12 +75,16 @@ final class SessionToolbar {
 
     var isDismissalPending: Bool { dismissal != nil }
     var isControlPressed: Bool { !pressedControls.isEmpty }
+    /// True only when the controls may be dismissed locally (not while
+    /// connecting or after the session has ended).
+    var canDismiss: Bool { stage == .established && isVisible }
 
     /// First presented desktop: show the toolbar, start the timeout and,
     /// once per installation, the gesture hint.
     func sessionEstablished(offeringHint: Bool) {
         guard stage == .pending else { return }
         stage = .established
+        anchorPoint = nil
         setVisible(true)
         restartDismissal()
         guard offeringHint, !defaults.bool(forKey: Self.hintShownKey) else { return }
@@ -99,14 +107,29 @@ final class SessionToolbar {
         endHint()
         isMenuOpen = false
         pressedControls.removeAll()
+        anchorPoint = nil
         setVisible(true)
     }
 
     /// Two-finger double tap and the accessibility actions.
-    func toggle() {
+    func toggle(at anchor: CGPoint? = nil) {
         guard stage == .established else { return }
         endHint()
-        if isVisible { hide() } else { setVisible(true); restartDismissal() }
+        if isVisible {
+            hide()
+        } else {
+            anchorPoint = anchor
+            setVisible(true)
+            restartDismissal()
+        }
+    }
+
+    /// Explicit local dismissal from the radial center hub or an outside tap.
+    /// Never hides the controls while connecting or after the session ended.
+    func dismiss() {
+        guard stage == .established, isVisible else { return }
+        endHint()
+        hide()
     }
 
     /// A toolbar control was used: a full timeout starts again.

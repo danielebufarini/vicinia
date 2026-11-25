@@ -125,6 +125,9 @@ final class SessionController {
     /// Presentation state of the on-demand session toolbar (one per session).
     let toolbar: SessionToolbar
     @ObservationIgnored private weak var inputView: DesktopView?
+    /// Live desktop surface currently attached to this session, used to
+    /// coordinate radial overlay gesture dependencies with `DesktopView`.
+    var desktopView: DesktopView? { inputView }
     @ObservationIgnored private(set) var inputEpoch: UInt64 = 0
     @ObservationIgnored private(set) var inputReady = false
     private struct QueuedInput {
@@ -342,7 +345,8 @@ final class SessionController {
         inputView = view
         view.onKeyboardShown = { [weak self] shown in self?.keyboardShown = shown }
         view.onInput = { [weak self] event in self?.handleInput(event) }
-        view.onToolbarToggle = { [weak self] in self?.toolbar.toggle() }
+        view.onToolbarToggle = { [weak self] in self?.toolbar.toggle(at: nil) }
+        view.onToolbarToggleAt = { [weak self] point in self?.toolbar.toggle(at: point) }
         renderer?.onPresented = { [weak self] presentation in
             Task { @MainActor in
                 guard let self, !self.stopped, let session = self.session else { return }
