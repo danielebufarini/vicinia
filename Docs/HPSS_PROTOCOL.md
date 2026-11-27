@@ -829,9 +829,16 @@ requests its contents with:
 0b 00 00 00 00 00 00 00
 ```
 
-Clipboard data travels as message `0x1F` in either direction. A Mac-to-client
-reply does not carry a request identifier. Clients should serialize outstanding
-requests and take care not to apply stale responses after a newer local change.
+Clipboard data travels as message `0x1F` in either direction. In the observed
+Apple Screen Sharing exchange with the all-zero request above, the reply has
+no echoed request identifier. Whether the other request bytes can be used to
+obtain a correlated reply remains unresolved.
+
+Vicinia serializes its clipboard writes, suppresses an abandoned fetch before
+handing its request to the session writer, and checks local and remote
+freshness before applying an answer. Once a request has been dispatched, its
+late reply can be indistinguishable from the reply to a newer request. These
+client checks do not add correlation or cancellation to the wire protocol.
 
 ```mermaid
 sequenceDiagram
