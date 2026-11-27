@@ -80,11 +80,21 @@ struct SessionView: View {
                     Text(notice.message)
                         .font(.caption).padding(8).background(.regularMaterial, in: .capsule).padding()
                 }
+                if source.live != nil, controller.phase == .streaming, let state = controller.audioState, state.needsAttention {
+                    Text(state.notice)
+                        .font(.caption).padding(8).background(.regularMaterial, in: .capsule).padding()
+                }
+                if source.live != nil, ![.idle, .disconnecting, .failed].contains(controller.phase),
+                   let notice = controller.clipboard?.notice {
+                    Text(notice.message)
+                        .font(.caption).multilineTextAlignment(.center)
+                        .padding(8).background(.regularMaterial, in: .capsule).padding()
+                }
             }
             .allowsHitTesting(false)
         }
         .overlay {
-            SessionRadialControlsOverlay(controller: controller, onClose: onClose)
+            SessionRadialControlsOverlay(controller: controller, showsAudio: source.live != nil, onClose: onClose)
         }
         #if DEBUG && VICINIA_DEVELOPER_TOOLS
         .overlay(alignment: .topLeading) {
@@ -116,6 +126,9 @@ struct SessionView: View {
                 .background(.regularMaterial, in: .rect(cornerRadius: 14))
             }
         }
+        .sheet(isPresented: Bindable(controller).clipboardSendShown) {
+            ClipboardSendPanel(onPaste: { controller.sendClipboard($0) }, onCancel: { controller.clipboardSendShown = false })
+        }
         .sheet(item: Bindable(controller).trustPrompt) { prompt in
             HostKeyVerificationView(prompt: prompt) { controller.resolveTrust($0) }
                 .interactiveDismissDisabled()
@@ -130,8 +143,219 @@ struct SessionView: View {
                 AccessibilityNotification.Announcement("\(String(localized: Self.hintTitle)). \(String(localized: Self.hintMessage))").post()
             }
         }
+        .onChange(of: controller.clipboard?.notice) { _, notice in
+            if let notice { AccessibilityNotification.Announcement(notice.message).post() }
+        }
         .onChange(of: controller.toolbar.prefersPointerLock, initial: true) { _, locked in onPointerLockPreference(locked) }
         .onDisappear { controller.stop() }
+    }
+}
+
+extension AudioPipeline.State {
+    /// Compact, non-color-only status badge shown on the radial Audio control.
+    /// Every state uses a distinct SF Symbol glyph in addition to semantic tinting.
+    enum StatusBadge: Equatable, Sendable {
+        case active
+        case negotiating
+        case muted
+        case inactive
+        case attention
+
+        var symbolName: String {
+            switch self {
+            case .active: "waveform"
+            case .negotiating: "ellipsis"
+            case .muted: "speaker.slash.fill"
+            case .inactive: "minus"
+            case .attention: "exclamationmark"
+            }
+        }
+
+        var backgroundColor: UIColor {
+            switch self {
+            case .active: .systemGreen
+            case .negotiating: .systemGray
+            case .muted: .systemIndigo
+            case .inactive: .secondaryLabel
+            case .attention: .systemOrange
+            }
+        }
+
+        var foregroundColor: UIColor {
+            switch self {
+            case .inactive: .systemBackground
+            default: .white
+            }
+        }
+    }
+
+    /// Short status for the Audio menu and accessibility value.
+    var title: String {
+        switch self {
+        case .disabled: String(localized: "Off")
+        case .negotiating: String(localized: "Waiting for audio from the Mac")
+        case .playing: String(localized: "Playing")
+        case .muted: String(localized: "Muted")
+        case .interrupted(.system): String(localized: "Interrupted")
+        case .interrupted(.routeLost): String(localized: "Paused: the audio output was disconnected")
+        case .interrupted(.mediaServices): String(localized: "Interrupted: the system audio service restarted")
+        case .unavailable: String(localized: "Not available on this device")
+        case .failed(let reason): reason
+        }
+    }
+
+    var statusBadge: StatusBadge {
+        switch self {
+        case .playing: .active
+        case .negotiating: .negotiating
+        case .muted: .muted
+        case .disabled, .unavailable: .inactive
+        case .interrupted, .failed: .attention
+        }
+    }
+
+    /// Not chosen by the user and not playing: shown even while the session controls are hidden.
+    var needsAttention: Bool {
+        switch self {
+        case .interrupted, .failed: true
+        default: false
+        }
+    }
+
+    var notice: String {
+        switch self {
+        case .failed(let reason): String(localized: "\(reason) The desktop is not affected.")
+        default: String(localized: "Mac audio: \(title). Resume it from Audio in session controls.")
+        }
+    }
+
+    var canResume: Bool { needsAttention }
+}
+
+/// Mac audio: first-class radial command showing state at a glance via a compact
+/// non-color-only badge over the `music.note` icon, play/stop (saved for this Mac),
+/// mute for this session, and resume after an interruption.
+final class AudioMenuControl: SessionToolbarControl {
+    private weak var controller: SessionController?
+    private var shown: (state: AudioPipeline.State?, enabled: Bool, muted: Bool)?
+    let statusBadgeView = UIView()
+    private let statusBadgeIconView = UIImageView()
+    private(set) var statusBadge: AudioPipeline.State.StatusBadge = .negotiating
+    var statusBadgeSymbolName: String { statusBadge.symbolName }
+
+    init(controller: SessionController) {
+        self.controller = controller
+        super.init(toolbar: controller.toolbar)
+        showsMenuAsPrimaryAction = true
+        accessibilityLabel = String(localized: "Mac audio")
+        accessibilityHint = String(localized: "Opens Mac audio options.")
+        accessibilityIdentifier = "radial.audio"
+        configureRadialAppearance(title: String(localized: "Audio"), symbolName: "music.note", style: .command)
+
+        statusBadgeView.isUserInteractionEnabled = false
+        statusBadgeView.isAccessibilityElement = false
+        statusBadgeView.clipsToBounds = true
+        statusBadgeView.layer.borderWidth = 1.5
+        statusBadgeIconView.isUserInteractionEnabled = false
+        statusBadgeIconView.isAccessibilityElement = false
+        statusBadgeIconView.contentMode = .scaleAspectFit
+        statusBadgeView.addSubview(statusBadgeIconView)
+        addSubview(statusBadgeView)
+        registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (self: Self, _) in
+            self.statusBadgeView.layer.borderColor = UIColor.systemBackground.withAlphaComponent(0.75).cgColor
+        }
+        refresh()
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        bringSubviewToFront(statusBadgeView)
+        let diameter = min(bounds.width, bounds.height)
+        guard diameter > 0 else { return }
+        let badgeSize = min(18, max(14, (diameter * 0.29).rounded()))
+        let buttonRadius = diameter / 2
+        let badgeRadius = badgeSize / 2
+        let orbit = max(0, buttonRadius - badgeRadius - 1)
+        let angle = -CGFloat.pi / 4
+        let badgeCenter = CGPoint(
+            x: bounds.midX + cos(angle) * orbit,
+            y: bounds.midY + sin(angle) * orbit
+        )
+        statusBadgeView.frame = CGRect(
+            x: badgeCenter.x - badgeRadius,
+            y: badgeCenter.y - badgeRadius,
+            width: badgeSize,
+            height: badgeSize
+        )
+        statusBadgeView.layer.cornerRadius = badgeRadius
+        statusBadgeView.layer.borderColor = UIColor.systemBackground.withAlphaComponent(0.75).cgColor
+        let iconInset = (badgeSize * 0.22).rounded(.down)
+        statusBadgeIconView.frame = statusBadgeView.bounds.insetBy(dx: iconInset, dy: iconInset)
+    }
+
+    /// Follows the controller; an unrelated update never replaces an open menu.
+    func refresh() {
+        guard let c = controller else { return }
+        let state = (state: c.audioState, enabled: c.audioEnabled, muted: c.audioMuted)
+        if let shown, shown == state { return }
+        shown = state
+        let current = c.audioState ?? .negotiating
+        let badge = current.statusBadge
+        statusBadge = badge
+        statusBadgeView.backgroundColor = badge.backgroundColor
+        statusBadgeIconView.tintColor = badge.foregroundColor
+        statusBadgeIconView.image = UIImage(
+            systemName: badge.symbolName,
+            withConfiguration: UIImage.SymbolConfiguration(pointSize: 9, weight: .bold)
+        )
+        configuration?.baseForegroundColor = badge == .inactive ? .secondaryLabel : .label
+        accessibilityValue = current.title
+        let used: @MainActor () -> Void = { [weak c] in c?.toolbar.controlUsed() }
+        var items: [UIMenuElement] = []
+        if current.canResume {
+            items.append(UIAction(title: String(localized: "Resume Audio")) { [weak c] _ in used(); c?.resumeAudio() })
+        }
+        let playable = state.state != nil && current != .unavailable
+        items.append(UIAction(title: String(localized: "Play Mac Audio"), attributes: playable ? [] : .disabled,
+                              state: c.audioEnabled && playable ? .on : .off) { [weak c] _ in
+            used()
+            if let c { c.setAudioEnabled(!c.audioEnabled) }
+        })
+        items.append(UIAction(title: String(localized: "Mute"), attributes: c.audioEnabled && playable ? [] : .disabled,
+                              state: c.audioMuted ? .on : .off) { [weak c] _ in
+            used()
+            if let c { c.setAudioMuted(!c.audioMuted) }
+        })
+        menu = UIMenu(title: String(localized: "Mac Audio: \(current.title)"), children: items)
+    }
+
+    override func cancelActiveInteraction() {
+        super.cancelActiveInteraction()
+        contextMenuInteraction?.dismissMenu()
+    }
+
+    override func handleMultiTouchDetected(with event: UIEvent?) {
+        super.handleMultiTouchDetected(with: event)
+        contextMenuInteraction?.dismissMenu()
+    }
+
+    override func contextMenuInteraction(_ interaction: UIContextMenuInteraction,
+                                         configurationForMenuAtLocation location: CGPoint) -> UIContextMenuConfiguration? {
+        guard !sawMultiTouch, radialMultiTouchInProgress?() != true else { return nil }
+        return super.contextMenuInteraction(interaction, configurationForMenuAtLocation: location)
+    }
+
+    override func contextMenuInteraction(_ interaction: UIContextMenuInteraction, willDisplayMenuFor configuration: UIContextMenuConfiguration,
+                                         animator: (any UIContextMenuInteractionAnimating)?) {
+        super.contextMenuInteraction(interaction, willDisplayMenuFor: configuration, animator: animator)
+        controller?.toolbar.setMenuOpen(true)
+    }
+
+    override func contextMenuInteraction(_ interaction: UIContextMenuInteraction, willEndFor configuration: UIContextMenuConfiguration,
+                                         animator: (any UIContextMenuInteractionAnimating)?) {
+        super.contextMenuInteraction(interaction, willEndFor: configuration, animator: animator)
+        controller?.toolbar.setMenuOpen(false)
     }
 }
 
@@ -160,6 +384,26 @@ private struct DesktopSurface: UIViewRepresentable {
 
     final class Coordinator {
         var started = false
+    }
+}
+
+/// Send local: the system paste control hands over what was copied on this
+/// device without a paste-permission prompt and without any disguised read.
+private struct ClipboardSendPanel: View {
+    let onPaste: ([NSItemProvider]) -> Void
+    let onCancel: () -> Void
+
+    var body: some View {
+        VStack(spacing: 16) {
+            Text("Send Clipboard to Mac").font(.headline)
+            Text("Tap Paste to put what you copied on this device on the Mac clipboard. Text, links, formatted text and images can be shared.")
+                .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
+            PasteButton(supportedContentTypes: ClipboardFormats.pasteTypes) { providers in onPaste(providers) }
+                .labelStyle(.titleAndIcon)
+            Button("Cancel", role: .cancel, action: onCancel)
+        }
+        .padding(24)
+        .presentationDetents([.medium])
     }
 }
 

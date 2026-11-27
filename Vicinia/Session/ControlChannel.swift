@@ -182,11 +182,13 @@ actor ControlChannel {
 
     /// Test seam, never set by the app: awaited before every send so
     /// a session test can hold one control write in flight deterministically.
-    private var sendGate: (@Sendable () async -> Void)?
-    func gateSends(_ gate: @escaping @Sendable () async -> Void) { sendGate = gate }
+    /// It sees each send's size; a throw stands for a failed network send.
+    private var sendGate: (@Sendable (Int) async throws -> Void)?
+    func gateSends(_ gate: @escaping @Sendable () async throws -> Void) { sendGate = { _ in try await gate() } }
+    func gateSends(bySize gate: @escaping @Sendable (Int) async throws -> Void) { sendGate = gate }
 
     func send(_ bytes: [UInt8]) async throws {
-        if let sendGate { await sendGate() }
+        if let sendGate { try await sendGate(bytes.count) }
         if let r = closedReason { throw ChannelError.closed(r) }
         try await withCheckedThrowingContinuation { (c: CheckedContinuation<Void, Error>) in
             connection.send(content: Data(bytes), completion: .contentProcessed { error in

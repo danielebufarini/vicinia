@@ -11,8 +11,8 @@ import VideoToolbox
 @Suite("Session instrumentation", .serialized)
 @MainActor
 struct InstrumentationTests {
-    @Test func displayActivityContinuesAfterLifecycleRecordingLimit() {
-        let controller = SessionController()
+    @Test(.appLifecycleExclusive) func displayActivityContinuesAfterLifecycleRecordingLimit() {
+        let controller = SessionController(slot: LiveSessionSlot()) // parallel suites: not the app's single-session owner
         controller.start(SessionSource(id: "lifecycle", clipURL: nil,
                                        live: LiveRequest(host: "lifecycle-test.invalid", username: "test",
                                                          password: SecretBytes("unused"))), window: nil)
@@ -37,7 +37,7 @@ struct InstrumentationTests {
                 .filter { $0.lastPathComponent.hasPrefix(prefix) }
         }
 
-        let controller = SessionController()
+        let controller = SessionController(slot: LiveSessionSlot()) // parallel suites: not the app's single-session owner
         #expect(controller.terminalTitle == nil)
         #expect(controller.connectionProgress == "Preparing the session…")
         #expect(try evidenceFiles().isEmpty)

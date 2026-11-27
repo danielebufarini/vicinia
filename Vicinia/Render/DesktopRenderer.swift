@@ -62,6 +62,7 @@ final class DesktopRenderer: NSObject, @preconcurrency CAMetalDisplayLinkDelegat
     var zoom: CGFloat = 1
     var pan: CGPoint = .zero
     var onPresented: (@Sendable (DesktopPresentation) -> Void)?
+    var onVideoPresented: (@Sendable (UInt64, UInt64, UInt32, UInt64) -> Void)?
 
     var viewportTransform: ViewportTransform? { shown.map { transform(for: $0) } }
 
@@ -256,6 +257,8 @@ final class DesktopRenderer: NSObject, @preconcurrency CAMetalDisplayLinkDelegat
         shown = nil
         waiting = nil
         lastNewTarget = 0
+        onPresented = nil
+        onVideoPresented = nil
         mapped.removeAll()
         CVMetalTextureCacheFlush(cache, 0)
     }
@@ -424,6 +427,7 @@ final class DesktopRenderer: NSObject, @preconcurrency CAMetalDisplayLinkDelegat
             #endif
             let id = RenderStats.UpdateID(generation: s.generation, rtpTimestamp: s.rtpTimestamp)
             let mailbox = self.mailbox, onPresented = self.onPresented
+            let onVideoPresented = self.onVideoPresented
             let geometry = s.layout.desktopGeometry, offerID = s.layout.offerID
             #if (DEBUG && VICINIA_DEVELOPER_TOOLS) || VICINIA_MEASUREMENT_TOOLS
             let record = timing
@@ -459,6 +463,7 @@ final class DesktopRenderer: NSObject, @preconcurrency CAMetalDisplayLinkDelegat
                     #endif
                 }
                 mailbox.note(timing, outcome)
+                if outcome == .presented { onVideoPresented?(offerID, id.generation, id.rtpTimestamp, UInt64(t * 1e9)) }
                 if t > 0, firstInGeneration {
                     onPresented?(DesktopPresentation(generation: id.generation, offerID: offerID, geometry: geometry,
                                                       nanos: UInt64(t * 1e9)))

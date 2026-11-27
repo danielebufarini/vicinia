@@ -25,12 +25,21 @@ enum SessionPresenter {
         print("[vicinia] landscape request: \(error)")
     }
 
-    static func present(_ source: SessionSource) {
-        let root = UIApplication.shared.connectedScenes
-            .compactMap { ($0 as? UIWindowScene)?.keyWindow?.rootViewController }.first
-        guard let root else { return }
-        var top = root
+    /// The controller that presents a session for a request made in `window`:
+    /// the top of that window's own presentation chain, never another scene's.
+    /// nil when the window is gone or is in the middle of a transition.
+    static func presenter(in window: UIWindow?) -> UIViewController? {
+        guard let window, window.windowScene != nil, var top = window.rootViewController else { return nil }
         while let p = top.presentedViewController { top = p }
+        guard !top.isBeingDismissed, !top.isBeingPresented else { return nil }
+        return top
+    }
+
+    /// Presents the session over the requesting window. false: nothing was
+    /// presented (the caller still owns whatever it reserved for the session).
+    @discardableResult
+    static func present(_ source: SessionSource, in window: UIWindow?) -> Bool {
+        guard let top = presenter(in: window) else { return false }
         weak var hostRef: SessionHostingController?
         let host = SessionHostingController(rootView: SessionView(source: source, onClose: {
             hostRef?.dismiss(animated: true)
@@ -44,5 +53,6 @@ enum SessionPresenter {
                 .iOS(interfaceOrientations: .landscapeRight), errorHandler: geometryRequestErrorHandler
             )
         }
+        return top.presentedViewController === host    // UIKit refused it otherwise
     }
 }

@@ -13,6 +13,11 @@ struct LiveRequest: Sendable {
     let host: String
     let username: String
     let password: SecretBytes
+    /// The saved profile this connection belongs to (nil: a transient identity).
+    var profile: ProfileBinding? = nil
+    /// The single-session claim taken where the request was made.
+    /// nil: the controller claims at start (tests and local tools).
+    var claim: LiveSessionSlot.Claim? = nil
 }
 
 struct SessionSource: Identifiable, Hashable {
@@ -114,7 +119,37 @@ final class SessionController {
         }
     }
     private(set) var inputOverflowNotice: InputOverflowNotice?
+    /// Mac audio of a live session (nil for local sources).
+    private(set) var audioState: AudioPipeline.State?
+    private(set) var audioEnabled = AudioPipeline.defaultEnabled
+    private(set) var audioMuted = false
+    @ObservationIgnored private(set) var audio: AudioPipeline?
+    /// Shared clipboard of a live session (nil for local sources).
+    private(set) var clipboard: ClipboardBridge?
+    /// The explicit Send panel (system paste control) is shown.
+    var clipboardSendShown = false
+    @ObservationIgnored private let pasteboard: any LocalPasteboard
+    /// The app's single-session owner (`.shared` unless a test injects its own).
+    @ObservationIgnored let slot: LiveSessionSlot
+    @ObservationIgnored private var liveClaim: LiveSessionSlot.Claim?
+    /// An HPSSSession exists for `liveClaim`: its teardown, not the phase, frees the slot.
+    @ObservationIgnored private var liveSessionCreated = false
+    /// This controller disabled the idle timer (a refused request never does).
+    @ObservationIgnored private(set) var holdsIdleTimer = false
+    @ObservationIgnored private(set) var lifetime: SessionLifetime?
+    @ObservationIgnored private var profileBinding: ProfileBinding?
+    /// The session's preference snapshot; saved explicitly for its own profile only.
+    @ObservationIgnored private(set) var preferences = ProfilePreferences()
+    @ObservationIgnored private(set) var sceneState = SceneState()
+    @ObservationIgnored private weak var windowScene: UIWindowScene?
+    @ObservationIgnored private var hasAttachedScene = false
+    @ObservationIgnored private var sceneObservers: [any NSObjectProtocol] = []
     @ObservationIgnored private var lifecycleObservers: [any NSObjectProtocol] = []
+    /// Minimum interval in nanoseconds between clipboard metadata checks.
+    static let clipboardCheckInterval: UInt64 = 1_000_000_000
+    @ObservationIgnored private var lastClipboardCheck: UInt64?
+    /// Read-only, for tests: change-count checks handed to the clipboard bridge.
+    @ObservationIgnored private(set) var clipboardChecks = 0
     #if (DEBUG && VICINIA_DEVELOPER_TOOLS) || VICINIA_MEASUREMENT_TOOLS
     @ObservationIgnored private var lifecycleEvents: [String] = []
     #endif
@@ -141,6 +176,8 @@ final class SessionController {
     @ObservationIgnored private(set) var inputTask: Task<Void, Never>?
     @ObservationIgnored private let channel: ControlChannel?
     @ObservationIgnored private let evidenceOverride: EvidenceLog?
+    @ObservationIgnored private let makeAudio: @MainActor (Bool) -> AudioPipeline
+    @ObservationIgnored private let protectedDataAvailable: @MainActor () -> Bool
     @ObservationIgnored private var inputRecovery: (id: UUID, session: HPSSSession, epoch: UInt64)?
     @ObservationIgnored private var cursor = CGPoint.zero
     @ObservationIgnored private var cursorInitialized = false
@@ -160,11 +197,19 @@ final class SessionController {
     struct InputRow: Sendable { let kind: String; let detail: Int; let event: TimeInterval; let sent: UInt64 }
     #endif
 
-    /// Tests may inject the existing control channel; production keeps its default endpoint.
-    init(channel: ControlChannel? = nil, evidence: EvidenceLog? = nil, toolbar: SessionToolbar = SessionToolbar()) {
+    /// Tests may inject the existing control channel and an audio pipeline
+    /// with a test output; production keeps its default endpoint and device output.
+    init(channel: ControlChannel? = nil, evidence: EvidenceLog? = nil, toolbar: SessionToolbar = SessionToolbar(),
+         protectedDataAvailable: @escaping @MainActor () -> Bool = { UIApplication.shared.isProtectedDataAvailable },
+         makeAudio: @escaping @MainActor (Bool) -> AudioPipeline = { AudioPipeline(enabled: $0) },
+         pasteboard: (any LocalPasteboard)? = nil, slot: LiveSessionSlot? = nil) {
         self.channel = channel
         self.evidenceOverride = evidence
         self.toolbar = toolbar
+        self.makeAudio = makeAudio
+        self.protectedDataAvailable = protectedDataAvailable
+        self.pasteboard = pasteboard ?? SystemPasteboard()
+        self.slot = slot ?? .shared
     }
 
     func escape() {
@@ -343,6 +388,10 @@ final class SessionController {
             #endif
         }
         inputView = view
+        view.onWindowSceneChanged = { [weak self, weak view] scene in
+            guard let self, let view, self.inputView === view else { return }
+            self.updateWindowScene(scene)
+        }
         view.onKeyboardShown = { [weak self] shown in self?.keyboardShown = shown }
         view.onInput = { [weak self] event in self?.handleInput(event) }
         view.onToolbarToggle = { [weak self] in self?.toolbar.toggle(at: nil) }
@@ -386,8 +435,23 @@ final class SessionController {
     }
 
     func start(_ source: SessionSource, window: UIWindow?) {
-        guard !stopped, phase != .failed else { return } // closed before deferred start, or renderer unavailable
+        guard !stopped, phase != .failed else {         // closed before deferred start, or renderer unavailable
+            if let reserved = source.live?.claim { slot.finish(reserved) } // reserved for a session that never starts
+            return
+        }
+        if let live = source.live {
+            // One live session per app, enforced here, before any side
+            // effect: the request's own claim must still be the live one.
+            let claim = if let reserved = live.claim { slot.holds(reserved) ? reserved : nil } else { slot.claim() }
+            guard let claim else {
+                wasLive = true
+                phaseChanged(.failed, String(localized: "Another Mac session is open in another window. Close it there before connecting here."))
+                return
+            }
+            liveClaim = claim
+        }
         UIApplication.shared.isIdleTimerDisabled = true
+        holdsIdleTimer = true
         #if (DEBUG && VICINIA_DEVELOPER_TOOLS) || VICINIA_MEASUREMENT_TOOLS
         let log = evidenceOverride ?? EvidenceLog(name: source.live.map { "live-\($0.host)" }
                               ?? source.clipURL?.deletingPathExtension().lastPathComponent ?? "viewport")
@@ -401,38 +465,28 @@ final class SessionController {
         timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.tick() }
         }
-        for (name, label) in [(UIApplication.willResignActiveNotification, "resignActive"),
-                              (UIApplication.didEnterBackgroundNotification, "background"),
-                              (UIApplication.willEnterForegroundNotification, "foreground"),
-                              (UIApplication.didBecomeActiveNotification, "active"),
-                              (UIApplication.didReceiveMemoryWarningNotification, "memoryWarning")] {
-            #if !((DEBUG && VICINIA_DEVELOPER_TOOLS) || VICINIA_MEASUREMENT_TOOLS)
-            if name == UIApplication.didReceiveMemoryWarningNotification ||
-                name == UIApplication.willEnterForegroundNotification { continue }
-            #endif
-            lifecycleObservers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated {
-                    guard let self else { return }
-                    // Not active: the system may stop presenting, which is not a stalled video path.
-                    if label == "resignActive" || label == "background" {
-                        self.mailbox.setDisplayActive(false)
-                        self.toolbar.setSceneActive(false)
-                    }
-                    if label == "active" { self.mailbox.setDisplayActive(true); self.toolbar.setSceneActive(true) }
-                    #if (DEBUG && VICINIA_DEVELOPER_TOOLS) || VICINIA_MEASUREMENT_TOOLS
-                    if self.lifecycleEvents.count < 64 {
-                        self.lifecycleEvents.append("\(label)@\(DispatchTime.now().uptimeNanoseconds)")
-                        self.evidence?.set("lifecycle.events", self.lifecycleEvents.joined(separator: " "))
-                    }
-                    #endif
-                }
-            })
-        }
+        #if (DEBUG && VICINIA_DEVELOPER_TOOLS) || VICINIA_MEASUREMENT_TOOLS
+        lifecycleObservers.append(NotificationCenter.default.addObserver(forName: UIApplication.didReceiveMemoryWarningNotification,
+                                                                         object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.noteSceneEvent("memoryWarning") }
+        })
+        #endif
         for name in [UIAccessibility.voiceOverStatusDidChangeNotification, UIAccessibility.switchControlStatusDidChangeNotification] {
             lifecycleObservers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated { self?.toolbar.assistiveTechnologyChanged() }
             })
         }
+        let protected: [(Notification.Name, SceneSignal)] = [
+            (UIApplication.protectedDataWillBecomeUnavailableNotification, .protectedDataWillBecomeUnavailable),
+            (UIApplication.protectedDataDidBecomeAvailableNotification, .protectedDataDidBecomeAvailable),
+        ]
+        for (name, signal) in protected {
+            lifecycleObservers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.sceneSignal(signal) }
+            })
+        }
+        if !protectedDataAvailable() { sceneState.apply(.protectedDataWillBecomeUnavailable) }
+        updateWindowScene(window?.windowScene)
         if let live = source.live {
             startLive(live)
             return
@@ -482,6 +536,10 @@ final class SessionController {
     func stop() {
         guard !stopped else { return }
         stopped = true
+        // Feature effects end before anything else; the input release and the
+        // teardown below are unchanged.
+        lifetime?.end(.voluntaryClose)
+        clipboardSendShown = false
         toolbar.sessionEnded()
         inputReady = false
         inputRecovery = nil
@@ -496,20 +554,25 @@ final class SessionController {
         timer = nil
         for observer in lifecycleObservers { NotificationCenter.default.removeObserver(observer) }
         lifecycleObservers = []
+        removeSceneObservers()
         renderer?.stop()
         resolveTrust(false)
         #if (DEBUG && VICINIA_DEVELOPER_TOOLS) || VICINIA_MEASUREMENT_TOOLS
         let flush = evidenceFlush()
         #endif
+        let claim = liveClaim, slot = self.slot
+        if let claim { slot.beginTeardown(claim) }
         if let session {
             self.session = nil
             Task {
                 await session.disconnect()
+                if let claim { slot.finish(claim) }   // teardown complete: a successor may bind media
                 #if (DEBUG && VICINIA_DEVELOPER_TOOLS) || VICINIA_MEASUREMENT_TOOLS
                 flush()
                 #endif
             }
         } else {
+            if let claim { slot.finish(claim) }       // no session was created
             #if (DEBUG && VICINIA_DEVELOPER_TOOLS) || VICINIA_MEASUREMENT_TOOLS
             if let replayer { replayer.stop(then: flush) }
             else { flush() }
@@ -519,7 +582,8 @@ final class SessionController {
         replayer = nil
         pipeline = nil
         #endif
-        UIApplication.shared.isIdleTimerDisabled = false
+        // A refused request never took the idle timer from the live session.
+        if holdsIdleTimer { UIApplication.shared.isIdleTimerDisabled = false }
     }
 
     private func tick() {
@@ -537,6 +601,7 @@ final class SessionController {
         }
         #endif
         if let session, phase == .streaming { Task { await session.pollCursor() } }
+        checkLocalClipboard(at: DispatchTime.now().uptimeNanoseconds)
         #if (DEBUG && VICINIA_DEVELOPER_TOOLS) || VICINIA_MEASUREMENT_TOOLS
         // Main run loop: counters and short strings only. Distributions, JSON
         // and file I/O run on the evidence queue, once a second.
@@ -568,6 +633,7 @@ final class SessionController {
             "New desktops presented: \(v.newDesktopsPresented) (\(lastSecond)/s)  ticks \(v.displayTicks)",
             "Viewport: \(geometry?.summary ?? "-")",
             "Keyboard: \(e?.value("keyboard.host") ?? "unknown")  pointer lock \(e?.value("pointer.locked") ?? "unknown")",
+            "Audio: \(audioState.map { "\($0)" } ?? "-")",
         ]
         #endif
     }
@@ -585,23 +651,36 @@ final class SessionController {
                 try? await Task.sleep(for: .milliseconds(50))
             }
             guard let self, !Task.isCancelled, !stopped else { return }
+            // A predecessor still tearing down owns the fixed media ports: wait,
+            // bounded; a teardown that does not complete is an explicit failure.
+            let predecessorsDone = await slot.awaitPredecessors()
+            guard !Task.isCancelled, !stopped else { return }
             startTask = nil
+            guard predecessorsDone else {
+                phaseChanged(.failed, String(localized: "The previous Mac session is still closing. Try again in a moment."))
+                return
+            }
             guard let g = geometry else {
                 phaseChanged(.failed, "Display setup is unavailable.")
                 return
             }
             let display = DisplayRequest(viewportPixels: g.usefulPixels.size, profile: profile)
-            let pipeline = MediaPipeline(ssrcToStripe: [:], canvas: nil, ruleOverride: nil, mailbox: mailbox, evidence: log)
+            let audio = startAudio(request.profile)
+            let pipeline = MediaPipeline(ssrcToStripe: [:], canvas: nil, ruleOverride: nil, mailbox: mailbox,
+                                         evidence: log, avClock: audio.avClock)
             #if (DEBUG && VICINIA_DEVELOPER_TOOLS) || VICINIA_MEASUREMENT_TOOLS
             self.pipeline = pipeline
             #endif
-            let config = SessionConfiguration(
+            var config = SessionConfiguration(
                 host: request.host, username: request.username,
                 logicalWidth: display.logicalWidth, logicalHeight: display.logicalHeight, hidpiScale: Double(profile.scale),
                 hardwareModel: DeviceInfo.machine, osBuild: DeviceInfo.osBuild, osVersion: DeviceInfo.osVersion)
+            // Requested whenever this device can play it: switching audio on or off
+            // in the session then needs no new offer, which would interrupt video and input.
+            config.audio = audio.canPlay ? .requested : .suppressed
             log.set("session.request", "\(request.host) \(display.summary)")
             let session = HPSSSession(
-                config: config, password: request.password, pipeline: pipeline, evidence: log, channel: channel,
+                config: config, password: request.password, pipeline: pipeline, evidence: log, channel: channel, audio: audio,
                 trust: { [weak self] host, fingerprint in
                     await self?.askTrust(host: host, fingerprint: fingerprint) ?? false
                 },
@@ -609,7 +688,13 @@ final class SessionController {
                     Task { @MainActor in self?.phaseChanged(phase, detail) }
                 })
             self.session = session
-            Task { [weak self] in
+            liveSessionCreated = true
+            let clipboard = startClipboard(session)
+            let claim = liveClaim, slot = self.slot
+            Task { [weak self, weak clipboard, session] in
+                await session.bindClipboard { [weak clipboard] event in
+                    Task { @MainActor in clipboard?.handle(event) }
+                }
                 await session.bindInput(epoch: { [weak self, weak session] epoch, ready in
                     Task { @MainActor in
                         guard let self, let session, !self.stopped, self.session === session,
@@ -632,6 +717,8 @@ final class SessionController {
                     }
                 }
                 await session.run()
+                await session.awaitTeardown()
+                if let claim { slot.finish(claim) }     // also after a failure, without waiting for Close
             }
         }
     }
@@ -639,6 +726,12 @@ final class SessionController {
     private func phaseChanged(_ p: SessionPhase, _ detail: String) {
         phase = p
         if [.idle, .disconnecting, .failed].contains(p) {
+            lifetime?.end(.sessionEnded)
+            clipboardSendShown = false
+            if let liveClaim {
+                slot.beginTeardown(liveClaim)                  // freed once teardown completes
+                if !liveSessionCreated { slot.finish(liveClaim) } // failed before any session: nothing to tear down
+            }
             inputReady = false
             inputRecovery = nil
             inputQueue.removeAll()
@@ -648,7 +741,11 @@ final class SessionController {
         if p != .streaming { mediaStalledSeconds = nil }
         if p == .streaming {
             // Successful establishment = the first presented desktop of this session.
-            if !hasPresentedDesktop, !stopped { toolbar.sessionEstablished(offeringHint: wasLive) }
+            if !hasPresentedDesktop, !stopped {
+                toolbar.sessionEstablished(offeringHint: wasLive)
+                profileBinding?.recordSuccessfulConnection()
+                lifetime?.sessionEstablished()
+            }
             hasPresentedDesktop = true
             scheduleDisplayChange()
         }
@@ -656,6 +753,227 @@ final class SessionController {
         status = detail.isEmpty ? p.rawValue : "\(p.rawValue): \(detail)"
         print("[vicinia] session \(status)")
     }
+
+    // MARK: Mac audio and session lifetime
+
+    /// One lifetime and one audio pipeline per live session; audio is
+    /// registered with the lifetime, so every revocation stops and flushes it.
+    private func startAudio(_ binding: ProfileBinding?) -> AudioPipeline {
+        profileBinding = binding
+        preferences = binding?.preferences ?? ProfilePreferences()
+        audioEnabled = preferences.audio?.enabled ?? AudioPipeline.defaultEnabled
+        let lifetime = SessionLifetime(profileID: binding?.profileID ?? UUID(), scene: sceneState)
+        let audio = makeAudio(audioEnabled)
+        let clock = audio.avClock
+        renderer?.onVideoPresented = { clock.videoPresented(offer: $0, generation: $1, timestamp: $2, nanos: $3) }
+        audio.bind { [weak self, weak audio] state in
+            DispatchQueue.main.async {
+                guard let self, let audio, self.audio === audio, !self.stopped else { return }
+                self.audioState = state
+            }
+        }
+        lifetime.register("audio", grant: { audio.authorize($0) },
+                          revoke: { _ in audio.revoke() }, end: { audio.terminate() })
+        self.lifetime = lifetime
+        self.audio = audio
+        return audio
+    }
+
+    /// Plays or stops the Mac's audio in this session and saves the choice for this Mac.
+    func setAudioEnabled(_ on: Bool) {
+        guard audio != nil, !stopped else { return }
+        audioEnabled = on
+        audio?.setEnabled(on)
+        preferences.audio = AudioPreference(enabled: on)
+        profileBinding?.save(preferences)
+    }
+
+    // MARK: shared clipboard
+
+    /// One bridge per live session, registered with the lifetime like audio:
+    /// grants open the session's accessory gate, every revocation closes it
+    /// first (nothing more is sealed), then drops queued clipboard writes.
+    private func startClipboard(_ session: HPSSSession) -> ClipboardBridge? {
+        guard let lifetime else { return nil }
+        let gate = session.accessoryGate
+        let local = pasteboard
+        let bridge = ClipboardBridge(
+            automaticSync: preferences.clipboard?.automaticSync ?? ClipboardBridge.defaultAutomaticSync,
+            pasteboard: local,
+            send: { [weak session] message, authorization in
+                await session?.sendAccessory(message, token: authorization.accessoryToken, producer: .clipboard) ?? .unavailable
+            },
+            saveAutomaticSync: { [weak self] on in self?.saveClipboardPreference(on) },
+            automaticReadAllowed: { [weak self] in self?.clipboardReadAllowed ?? false })
+        lifetime.register("clipboard", grant: { authorization in
+            gate.grant(authorization.accessoryToken)
+            bridge.grant(authorization)
+        }, revoke: { [weak session] reason in
+            gate.revoke()
+            bridge.revoke(reason)
+            Task { await session?.purgeAccessories() }
+        }, end: { [weak session] in
+            gate.revoke()
+            bridge.end()
+            Task { await session?.purgeAccessories() }
+        })
+        lifecycleObservers.append(NotificationCenter.default.addObserver(forName: UIPasteboard.changedNotification,
+                                                                         object: nil, queue: .main) { [weak self, weak bridge] _ in
+            MainActor.assumeIsolated {
+                // Only the active scene may read through its current bridge.
+                guard let self, let bridge, self.clipboard === bridge, self.clipboardReadAllowed else { return }
+                bridge.localPasteboardChanged()
+            }
+        })
+        clipboard = bridge
+        return bridge
+    }
+
+    /// An automatic clipboard read may start only while this
+    /// session runs and its scene is active: never while inactive (Control
+    /// Center, the paste prompt), in the background, locked or after the end.
+    private var clipboardReadAllowed: Bool { !stopped && sceneState.activity == .active }
+
+    private func saveClipboardPreference(_ on: Bool) {
+        preferences.clipboard = ClipboardPreference(automaticSync: on)
+        profileBinding?.save(preferences)
+    }
+
+    /// Another app can advance the pasteboard change count without notifying
+    /// this scene. Check the metadata from the session timer at most once a
+    /// second, and only while automatic sending could act. The bridge compares
+    /// the change count before reading content, so an unchanged clipboard
+    /// needs no programmatic read or permission prompt.
+    private func checkLocalClipboard(at now: UInt64) {
+        guard !stopped, sceneState.activity == .active,
+              let clipboard, clipboard.isAuthorized, clipboard.automaticSync else { return }
+        if let lastClipboardCheck, now &- lastClipboardCheck < Self.clipboardCheckInterval { return }
+        lastClipboardCheck = now
+        clipboardChecks += 1
+        clipboard.localPasteboardChanged()
+    }
+
+    /// Send local: shows the system paste control, which needs no paste permission.
+    func presentClipboardSend() {
+        guard clipboard != nil, !stopped else { return }
+        clipboardSendShown = true
+    }
+
+    func sendClipboard(_ providers: [NSItemProvider]) {
+        clipboardSendShown = false
+        guard !stopped else { return }
+        clipboard?.sendManual(providers)
+    }
+
+    /// Receive current Mac.
+    func receiveClipboard() {
+        guard !stopped else { return }
+        clipboard?.receiveManual()
+    }
+
+    /// Automatic sync for this session, saved for this Mac.
+    func setClipboardAutomaticSync(_ on: Bool) {
+        guard !stopped else { return }
+        clipboard?.setAutomaticSync(on)
+    }
+
+    /// Silences playback for this session only; the stream and its timing continue.
+    func setAudioMuted(_ on: Bool) {
+        guard audio != nil, !stopped else { return }
+        audioMuted = on
+        audio?.setMuted(on)
+    }
+
+    /// After an interruption or a local audio failure.
+    func resumeAudio() {
+        guard !stopped else { return }
+        audio?.resume()
+    }
+
+    /// The view may attach after start, detach or move to another scene.
+    /// App notifications are a temporary fallback before the first attachment.
+    func updateWindowScene(_ scene: UIWindowScene?) {
+        guard !stopped else { return }
+        removeSceneObservers()
+        windowScene = scene
+        hasAttachedScene = hasAttachedScene || scene != nil
+        let activity: SceneActivity
+        if let scene { activity = SceneActivity(scene.activationState) }
+        else if hasAttachedScene { activity = .background }
+        else {
+            switch UIApplication.shared.applicationState {
+            case .active: activity = .active
+            case .inactive: activity = .inactive
+            default: activity = .background
+            }
+        }
+        // Only protected-data availability can clear an observed lock.
+        sceneState = SceneState(activity, protectedDataAvailable: !sceneState.locked)
+        propagateScene()
+        guard scene != nil || !hasAttachedScene else { return }
+        let signals: [(Notification.Name, SceneSignal)] = scene != nil ? [
+            (UIScene.willDeactivateNotification, .willDeactivate), (UIScene.didEnterBackgroundNotification, .didEnterBackground),
+            (UIScene.willEnterForegroundNotification, .willEnterForeground), (UIScene.didActivateNotification, .didActivate),
+        ] : [
+            (UIApplication.willResignActiveNotification, .willDeactivate), (UIApplication.didEnterBackgroundNotification, .didEnterBackground),
+            (UIApplication.willEnterForegroundNotification, .willEnterForeground), (UIApplication.didBecomeActiveNotification, .didActivate),
+        ]
+        for (name, signal) in signals {
+            sceneObservers.append(NotificationCenter.default.addObserver(forName: name, object: scene, queue: .main) { [weak self, weak scene] _ in
+                MainActor.assumeIsolated {
+                    guard let self, self.windowScene === scene, scene != nil || !self.hasAttachedScene else { return }
+                    self.sceneSignal(signal)
+                }
+            })
+        }
+    }
+
+    private func removeSceneObservers() {
+        for observer in sceneObservers { NotificationCenter.default.removeObserver(observer) }
+        sceneObservers.removeAll()
+    }
+
+    private func propagateScene() {
+        let active = sceneState.activity == .active
+        mailbox.setDisplayActive(active)
+        toolbar.setSceneActive(active)
+        lifetime?.updateScene(sceneState)
+    }
+
+    /// Classification only here: transient inactivity changes nothing, true
+    /// background or device lock revokes, a return to active re-authorizes a
+    /// session that is still valid.
+    func sceneSignal(_ signal: SceneSignal) {
+        guard !stopped else { return }
+        sceneState.apply(signal)
+        propagateScene()
+        // A copy made in another app while this window stayed visible: read
+        // after this activation callback returns (the read may show a system prompt).
+        if signal == .didActivate, let clipboard {
+            Task { @MainActor [weak self, weak clipboard] in
+                // Recheck the bridge and scene after deferring the activation callback.
+                guard let self, let clipboard, self.clipboard === clipboard, self.clipboardReadAllowed else { return }
+                clipboard.localPasteboardChanged()
+            }
+        }
+        #if (DEBUG && VICINIA_DEVELOPER_TOOLS) || VICINIA_MEASUREMENT_TOOLS
+        switch signal {
+        case .willDeactivate: noteSceneEvent("resignActive")
+        case .didEnterBackground: noteSceneEvent("background")
+        case .willEnterForeground: noteSceneEvent("foreground")
+        case .didActivate: noteSceneEvent("active")
+        default: break
+        }
+        #endif
+    }
+
+    #if (DEBUG && VICINIA_DEVELOPER_TOOLS) || VICINIA_MEASUREMENT_TOOLS
+    private func noteSceneEvent(_ label: String) {
+        guard lifecycleEvents.count < 64 else { return }
+        lifecycleEvents.append("\(label)@\(DispatchTime.now().uptimeNanoseconds)")
+        evidence?.set("lifecycle.events", lifecycleEvents.joined(separator: " "))
+    }
+    #endif
 
     func askTrust(host: String, fingerprint: String) async -> Bool {
         guard !stopped else { return false }            // the view is gone: never prompt, never trust

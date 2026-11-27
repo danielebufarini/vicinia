@@ -11,6 +11,7 @@
 // one offer and at most one fresh-key retry.
 
 import Foundation
+import Synchronization
 
 enum SessionPhase: String, Sendable {
     case idle, connecting, rfbHandshake, authenticating, encryptedControl, virtualDisplayReady
@@ -51,6 +52,71 @@ struct SessionConfiguration: Sendable {
     var hardwareModel: String
     var osBuild: String
     var osVersion: (Int, Int, Int)
+    /// What the audio description asks the host for (field 4 of the offer).
+    var audio: AudioRequest = .suppressed
+}
+
+// MARK: shared accessory write boundary
+
+/// Local authorization of one accessory write: the session generation and the
+/// operation number of the grant in force. Never sent to the Mac.
+struct AccessoryToken: Hashable, Sendable {
+    let generation: UInt64
+    let operation: UInt64
+}
+
+/// One accessory producer; each may have one message queued or in flight.
+struct AccessoryProducer: Hashable, Sendable {
+    let name: String
+    static let clipboard = AccessoryProducer(name: "clipboard")
+}
+
+/// Result of one accessory write. Three stages are kept apart: sealing (the
+/// record exists, under the gate), network handoff (Network.framework
+/// processed the bytes) and remote execution, which this protocol never
+/// confirms: there is no acknowledgement, so no outcome means "applied".
+/// Admission refusals are never a session failure.
+enum AccessoryOutcome: Equatable, Sendable {
+    /// Sealed and handed to the network stack: possibly delivered, never
+    /// recalled, never confirmed as applied by the Mac.
+    case submitted
+    /// Revoked, or the session ended, before it was sealed: never sent.
+    case cancelled
+    /// Sealing or the network handoff failed: delivery is unknown, and the
+    /// session takes its normal failure path (terminal, like any control write).
+    case failed
+    /// Larger than one accessory message may be (explicit size limitation).
+    case tooLarge(limit: Int)
+    /// The accessory budget or this producer's single slot is occupied: not queued.
+    case busy
+    /// No authorized, established session: not queued.
+    case unavailable
+}
+
+/// The accessory authorization that the serialized drain checks before
+/// sealing. A revocation waits for a seal already in progress; no accessory
+/// write is sealed after `revoke()` returns.
+final class AccessoryGate: Sendable {
+    private let current = Mutex<AccessoryToken?>(nil)
+    func grant(_ token: AccessoryToken) { current.withLock { $0 = token } }
+    func revoke() { current.withLock { $0 = nil } }
+    func isValid(_ token: AccessoryToken) -> Bool { current.withLock { $0 == token } }
+    /// Seals only while `token` is current, holding the gate meanwhile; nil when it is not.
+    func sealing(_ token: AccessoryToken, _ seal: () throws -> [UInt8]) throws -> [UInt8]? {
+        try current.withLock { current throws -> [UInt8]? in current == token ? try seal() : nil }
+    }
+}
+
+private struct AccessoryRevoked: Error {}
+
+/// What the control reader hands to the clipboard owner (never logged).
+enum ClipboardEvent: Sendable {
+    /// MiscStatus command 2: the Mac pasteboard changed.
+    case remoteChanged
+    /// One complete 0x1f message, still compressed.
+    case content([UInt8])
+    /// A 0x1f message beyond the inbound bound, discarded unread.
+    case oversize(compressed: Int)
 }
 
 actor HPSSSession {
@@ -58,6 +124,7 @@ actor HPSSSession {
     private var password: SecretBytes?
     private let channel: ControlChannel
     private let pipeline: MediaPipeline
+    private let audio: AudioPipeline?
     private let evidence: EvidenceLog
     private let onPhase: @Sendable (SessionPhase, String) -> Void
     private let trust: @Sendable (String, String) async -> Bool
@@ -86,6 +153,8 @@ actor HPSSSession {
     private var stats: [String: Int] = [:]
     private var finished = false
     private var tearingDown = false
+    private var teardownComplete = false
+    private var teardownWaiters: [CheckedContinuation<Void, Never>] = []
     private var input = InputState()
     private var cursors = CursorCache()
     var onInputEpoch: (@Sendable (UInt64, Bool) -> Void)?
@@ -93,6 +162,10 @@ actor HPSSSession {
     /// Seconds without media while streaming (nil: media is flowing again).
     var onMediaStall: (@Sendable (Double?) -> Void)?
     func bindMediaStall(_ handler: @escaping @Sendable (Double?) -> Void) { onMediaStall = handler }
+    private var onClipboard: (@Sendable (ClipboardEvent) -> Void)?
+    func bindClipboard(_ handler: @escaping @Sendable (ClipboardEvent) -> Void) { onClipboard = handler }
+    /// Bytes of an oversize clipboard payload still to be skipped as records arrive.
+    private var discardRemaining = 0
 
     // MARK: media recovery: bounded, no automatic reconnect
 
@@ -171,13 +244,14 @@ actor HPSSSession {
 
     /// `channel`: tests inject their own; the app always uses the default.
     init(config: SessionConfiguration, password: SecretBytes, pipeline: MediaPipeline, evidence: EvidenceLog,
-         channel: ControlChannel? = nil,
+         channel: ControlChannel? = nil, audio: AudioPipeline? = nil,
          trust: @escaping @Sendable (String, String) async -> Bool,
          onPhase: @escaping @Sendable (SessionPhase, String) -> Void) {
         self.config = config
         self.password = password
         self.channel = channel ?? ControlChannel(host: config.host, port: config.port)
         self.pipeline = pipeline
+        self.audio = audio
         self.evidence = evidence
         self.trust = trust
         self.onPhase = onPhase
@@ -282,7 +356,18 @@ actor HPSSSession {
         await teardown(releasingInput: false)
     }
 
+    /// Returns once a teardown that has begun is complete (fixed media ports
+    /// are free again). Called after `run()` returned or after `disconnect()`.
+    func awaitTeardown() async {
+        guard !teardownComplete else { return }
+        await withCheckedContinuation { teardownWaiters.append($0) }
+    }
+
     func disconnect() async {
+        if tearingDown {
+            if !teardownComplete { await withCheckedContinuation { teardownWaiters.append($0) } }
+            return
+        }
         guard !finished else { return }
         enter(.disconnecting)
         await teardown()
@@ -303,6 +388,12 @@ actor HPSSSession {
             return
         }
         tearingDown = true
+        defer {
+            teardownComplete = true
+            for waiter in teardownWaiters { waiter.resume() }
+            teardownWaiters.removeAll()
+        }
+        audio?.terminate()                       // revoke audio before awaiting input release
         if releasingInput, records != nil { try? await suspendInput() }
         else {
             // Preserve fail-closed behavior: never emit release records
@@ -330,6 +421,7 @@ actor HPSSSession {
         }
         self.transport = nil
         await channel.close()
+        await audio?.stopAndDrain()
         evidence.set("control.counters", stats.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: " "))
         evidence.set("session.teardown", ISO8601DateFormatter().string(from: Date()))
     }
@@ -438,7 +530,7 @@ actor HPSSSession {
             transport = existing
         } else {
             if let existing = self.transport { await onMediaQueue { existing.stop() } }
-            transport = MediaTransport(pipeline: pipeline, evidence: evidence, tiles: MediaOffer.tilesPerFrame)
+            transport = MediaTransport(pipeline: pipeline, evidence: evidence, tiles: MediaOffer.tilesPerFrame, audio: audio)
             self.transport = transport
             let host = config.host, pipeline = self.pipeline
             try await onMediaQueueThrowing { [weak self] in
@@ -457,14 +549,14 @@ actor HPSSSession {
             offerSerial += 1
             currentOffer = offerSerial
             let offer = try MediaOffer.make(clientName: config.clientName, hardwareModel: config.hardwareModel,
-                                            osBuild: config.osBuild)
+                                            osBuild: config.osBuild, audio: config.audio)
             let offerID = currentOffer
             try await onMediaQueueThrowing {
                 try transport.configure(keys: offer.keys, videoSSRC: offer.videoSSRC, audioSSRC: offer.audioSSRC, offerID: offerID)
             }
             try await sendSealed(offer.message)
             try await sendSealed(RFB.framebufferUpdateRequest(incremental: false))
-            evidence.set("media.offer.\(currentOffer)", "message1 \(consumedMediaInit), attempt \(attempt); 0x1c \(offer.message.count) B, flags 0x\(String(MediaOffer.configFlags, radix: 16)), tiles \(MediaOffer.tilesPerFrame), HEVC bank, audio f4=1000; fresh SRTP contexts")
+            evidence.set("media.offer.\(currentOffer)", "message1 \(consumedMediaInit), attempt \(attempt); 0x1c \(offer.message.count) B, flags 0x\(String(MediaOffer.configFlags, radix: 16)), tiles \(MediaOffer.tilesPerFrame), HEVC bank, audio f4=\(config.audio.preferredBitRate); fresh SRTP contexts")
             canvas = try await awaitAnswer(timeout: .milliseconds(1200))
             if canvas != nil { break }
         }
@@ -539,12 +631,78 @@ actor HPSSSession {
     private var sending = false
     /// Writes queued behind the one being sent (read-only; used by session tests).
     var pendingWrites: Int { outbound.count }
+    /// Accessory writes among them (read-only; used by session tests).
+    var queuedAccessories: Int { outbound.filter { if case .accessory = $0.0 { true } else { false } }.count }
+    /// Queued-byte guard of the shared writer: reaching it is terminal for every writer.
+    static let controlBacklogLimit = 1 << 20
+    /// Accessory writes are admitted only while the whole queue stays within
+    /// this budget, keeping a quarter of the guard for input, release,
+    /// transition and cursor writes. It is also the largest accessory message:
+    /// a 0x1f message is one indivisible RFB message, so it cannot be chunked.
+    static let accessoryBudget = 768 << 10
+    nonisolated let accessoryGate = AccessoryGate()
+    /// Producers with one accessory message queued or in flight.
+    private var accessoryProducers: Set<AccessoryProducer> = []
+    /// The accessory write taken from the queue and being sealed or sent: no
+    /// longer in `outboundBytes`, still part of the accessory budget.
+    private var accessoryInFlightBytes = 0
+
+    /// Non-terminal admission: an accessory write that does not fit is refused
+    /// here, before the shared writer, and can never reach the session fail path.
+    /// One message per producer; the caller awaits it before the next.
+    func sendAccessory(_ message: [UInt8], token: AccessoryToken, producer: AccessoryProducer) async -> AccessoryOutcome {
+        guard message.count <= Self.accessoryBudget else {
+            stats["accessory.tooLarge", default: 0] += 1
+            return .tooLarge(limit: Self.accessoryBudget)
+        }
+        guard !finished, !tearingDown, records != nil, accessoryGate.isValid(token) else { return .unavailable }
+        guard !accessoryProducers.contains(producer),
+              outboundBytes + accessoryInFlightBytes + message.count <= Self.accessoryBudget else {
+            stats["accessory.busy", default: 0] += 1
+            return .busy
+        }
+        accessoryProducers.insert(producer)
+        defer { accessoryProducers.remove(producer) }
+        do {
+            try await sendWrite(.accessory(message, token))
+            stats["accessory.submitted", default: 0] += 1
+            return .submitted
+        } catch is AccessoryRevoked {
+            return .cancelled
+        } catch let error as ChannelError where error == .closed("session ended") {
+            return .cancelled                       // abandoned in the queue by teardown: never sealed
+        } catch {
+            stats["accessory.failed", default: 0] += 1
+            await fail(error)                       // a transport or record failure is terminal, as for input
+            return .failed
+        }
+    }
+
+    /// After a revocation: drops queued accessory writes whose token is no
+    /// longer current; their callers learn they were never sent. The write
+    /// being sent, if any, is not recalled.
+    func purgeAccessories() {
+        var kept: [(ControlWrite, CheckedContinuation<Void, Error>)] = []
+        for entry in outbound {
+            if case .accessory(_, let token) = entry.0, !accessoryGate.isValid(token) {
+                outboundBytes -= entry.0.queuedByteCount
+                stats["accessory.purged", default: 0] += 1
+                entry.1.resume(throwing: AccessoryRevoked())
+            } else {
+                kept.append(entry)
+            }
+        }
+        outbound = kept
+    }
+
     private func sendSealed(_ message: [UInt8]) async throws {
         try await sendWrite(.message(message))
     }
     private func sendWrite(_ write: ControlWrite) async throws {
         guard !finished, records != nil else { throw SessionFailure.protocolViolation("record layer inactive") }
-        guard outboundBytes + write.queuedByteCount <= 1 << 20 else { throw SessionFailure.protocolViolation("control send backlog") }
+        guard outboundBytes + write.queuedByteCount <= Self.controlBacklogLimit else {
+            throw SessionFailure.protocolViolation("control send backlog")
+        }
         try await withCheckedThrowingContinuation { (c: CheckedContinuation<Void, Error>) in
             outbound.append((write, c)); outboundBytes += write.queuedByteCount
             if !sending {
@@ -561,12 +719,27 @@ actor HPSSSession {
         while !finished, !outbound.isEmpty {
             let (write, continuation) = outbound.removeFirst()
             outboundBytes -= write.queuedByteCount
+            if case .accessory = write { accessoryInFlightBytes = write.queuedByteCount }
+            defer { accessoryInFlightBytes = 0 }    // every iteration, including continue and break
             do {
                 guard let records else { throw ChannelError.closed("record layer inactive") }
                 let buttons = input.buttons, keys = input.keys.count
                 // No suspension between epoch validation, ledger mutation and
                 // submission: a reentrant transition includes this in-flight send.
-                let bytes = try write.seal(records: records, input: &input)
+                let bytes: [UInt8]?
+                if case .accessory(let message, let token) = write {
+                    // Same rule for accessory writes: the token is checked
+                    // under the gate immediately before sealing. A revoked one
+                    // is dropped, unsent, and never delays what follows.
+                    guard let sealed = try accessoryGate.sealing(token, { try records.seal(message) }) else {
+                        stats["accessory.droppedAtDrain", default: 0] += 1
+                        continuation.resume(throwing: AccessoryRevoked())
+                        continue
+                    }
+                    bytes = sealed
+                } else {
+                    bytes = try write.seal(records: records, input: &input)
+                }
                 if case .release = write {
                     evidence.set("input.release", "epoch \(input.epoch) releasedButtons \(buttons) releasedKeys \(keys) recordBytes \(bytes?.count ?? 0) heldButtons \(input.buttons) heldKeys \(input.keys.count)")
                 }
@@ -594,6 +767,13 @@ actor HPSSSession {
         pending += try records.open(try await channel.read(n, timeout: .seconds(10), "record"))
         stats["records", default: 0] += 1
         var out: [Handled] = []
+        // Bounded discard of an oversize clipboard payload: dropped as it arrives, never buffered.
+        if discardRemaining > 0 {
+            let skipped = min(discardRemaining, pending.count)
+            pending.removeFirst(skipped)
+            discardRemaining -= skipped
+            if discardRemaining > 0 { return out }
+        }
         while !pending.isEmpty {
             // A message may span records and a record may end mid-message: the
             // parser delimits by the message grammar only, or fails explicitly.
@@ -610,6 +790,13 @@ actor HPSSSession {
             case .complete(let message, let consumed):
                 pending.removeFirst(consumed)
                 out += try await handle(message)
+            case .discard(let message, let consumed, let skip):
+                pending.removeFirst(consumed)
+                let skipped = min(skip, pending.count)
+                pending.removeFirst(skipped)
+                discardRemaining = skip - skipped
+                out += try await handle(message)
+                if discardRemaining > 0 { return out }
             }
         }
         return out
@@ -663,9 +850,16 @@ actor HPSSSession {
             return out
         case .miscStatus(let command, _):
             stats["misc.\(command.map(String.init) ?? "?")", default: 0] += 1
+            if command == ClipboardWire.pasteboardChangedStatus { onClipboard?(.remoteChanged) }
         case .bell: stats["bell", default: 0] += 1
         case .cutText: stats["cutTextDiscarded", default: 0] += 1
-        case .clipboardSend: stats["clipboardDiscarded", default: 0] += 1
+        case .clipboardSend(let message):
+            // Handed over still compressed: decoding runs off this actor and the main actor.
+            stats["clipboard.received", default: 0] += 1
+            onClipboard?(.content(message))
+        case .clipboardOversize(let compressed):
+            stats["clipboard.oversizeDiscarded", default: 0] += 1
+            onClipboard?(.oversize(compressed: compressed))
         }
         return [.other]
     }

@@ -128,11 +128,16 @@ enum ServerMessage {
     case miscStatus(command: UInt16?, body: [UInt8])
     case bell
     case cutText(length: Int)                 // content discarded, never stored
-    case clipboardSend(length: Int)           // 0x1f, content discarded, never stored
+    /// 0x1f: the whole message (header and still-compressed payload), handed to the clipboard owner.
+    case clipboardSend([UInt8])
+    /// 0x1f beyond the inbound bound: its payload is skipped unread.
+    case clipboardOversize(compressed: Int)
 }
 
 enum ParseResult {
     case complete(ServerMessage, consumed: Int)
+    /// `consumed` header bytes are parsed; the next `skip` bytes are discarded as they arrive.
+    case discard(ServerMessage, consumed: Int, skip: Int)
     case needMore
 }
 
@@ -144,6 +149,8 @@ enum ParseResult {
 /// length cannot be determined is an explicit error (no resynchronisation guess).
 enum ServerMessageParser {
     static let maxMessage = 8 << 20
+    /// Largest clipboard payload buffered; a native larger one is discarded, not fatal.
+    static let inboundClipboard = ClipboardLimits.standard.inboundCompressed
 
     static func parse(_ b: [UInt8]) throws -> ParseResult {
         guard let type = b.first else { return .needMore }
@@ -163,10 +170,14 @@ enum ServerMessageParser {
             let cmd: UInt16? = n >= 4 ? UInt16(body[2]) << 8 | UInt16(body[3]) : nil
             return .complete(.miscStatus(command: cmd, body: body), consumed: 4 + n)
         case 0x1F:                                      // clipboard send: 16-byte header, u32 compressed at +12
-            guard b.count >= 16 else { return .needMore }
+            guard b.count >= ClipboardWire.headerLength else { return .needMore }
             let n = Int(b[12]) << 24 | Int(b[13]) << 16 | Int(b[14]) << 8 | Int(b[15])
-            guard n <= maxMessage else { throw WireError.invalid("clipboard length") }
-            return b.count >= 16 + n ? .complete(.clipboardSend(length: 16 + n), consumed: 16 + n) : .needMore
+            guard n <= ClipboardWire.nativeMaximum else { throw WireError.invalid("clipboard length") }
+            let total = ClipboardWire.headerLength + n
+            guard n <= inboundClipboard else {
+                return .discard(.clipboardOversize(compressed: n), consumed: ClipboardWire.headerLength, skip: n)
+            }
+            return b.count >= total ? .complete(.clipboardSend(Array(b[0 ..< total])), consumed: total) : .needMore
         default:
             throw WireError.invalid(String(format: "undelimitable server message type 0x%02x", type))
         }

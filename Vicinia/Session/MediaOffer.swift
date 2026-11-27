@@ -1,7 +1,7 @@
 // Vicinia — Adaptive media offer (0x1c MediaStreamOptions) and answer parsing.
 // SPDX-License-Identifier: MIT
 //
-// Protobuf MediaBlob, f9 bitrate tier list, audio-off field4 = 1000,
+// Protobuf MediaBlob, f9 bitrate tier list, requested audio bitrate (field 4),
 // binary-plist wrapper, 0x1c layout and F5 canvas extraction. HEVC-only
 // codec bank (negotiates HEVC 4:4:4), first-video 60 fps + no-cursor flags with
 // second-video enablement cleared (0x05), Vicinia client name and the
@@ -20,6 +20,18 @@ struct MediaKeys {
     }
 }
 
+/// The audio description's field 4 is the requested audio bitrate
+/// (`preferredMediaBitRate`). The host selects an AAC-ELD tier for it; below
+/// the lowest tier's floor it selects none and sends no audio RTP. This is the
+/// only native audio control: the audio section is mandatory and carries no
+/// in-session enable field.
+enum AudioRequest: Sendable, Equatable {
+    case requested                // the value native Screen Sharing offers
+    case suppressed               // below the tier floor: no audio stream
+
+    var preferredBitRate: UInt64 { self == .requested ? 24_191 : 1_000 }
+}
+
 struct MediaOffer {
     let message: [UInt8]          // complete 0x1c message (to be record-encrypted)
     let keys: MediaKeys
@@ -29,7 +41,8 @@ struct MediaOffer {
     /// Big-endian: bit0 60 fps stream 1, bit2 do not send cursor; bit1 (stream 2) clear.
     static let configFlags: UInt32 = 0x05
 
-    static func make(clientName: String, hardwareModel: String, osBuild: String) throws -> MediaOffer {
+    static func make(clientName: String, hardwareModel: String, osBuild: String,
+                     audio: AudioRequest = .suppressed) throws -> MediaOffer {
         let keys = try MediaKeys.random()
         let rnd = try Crypto.randomBytes(8)
         let videoSSRC = rnd[0..<4].reduce(UInt32(0)) { $0 << 8 | UInt32($1) }
@@ -37,9 +50,9 @@ struct MediaOffer {
         let endpoint = remoteEndpointInfo(hardwareModel: hardwareModel, osBuild: osBuild)
         let video = try plist(mode: 7, blob: mediaBlob(video: true, sessionID: videoSSRC, clientName: clientName),
                               endpoint: endpoint)
-        let audio = try plist(mode: 8, blob: mediaBlob(video: false, sessionID: audioSSRC, clientName: clientName),
-                              endpoint: endpoint)
-        return MediaOffer(message: try build0x1c(audio: audio, video: video, keys: keys),
+        let audioOffer = try plist(mode: 8, blob: mediaBlob(video: false, sessionID: audioSSRC, clientName: clientName,
+                                                         audio: audio), endpoint: endpoint)
+        return MediaOffer(message: try build0x1c(audio: audioOffer, video: video, keys: keys),
                           keys: keys, videoSSRC: videoSSRC, audioSSRC: audioSSRC)
     }
 
@@ -62,7 +75,8 @@ struct MediaOffer {
     ]
 
     static func mediaBlob(video: Bool, sessionID: UInt32, clientName: String,
-                          timestampNanos: UInt64 = UInt64(Date().timeIntervalSince1970 * 1e9)) -> [UInt8] {
+                          timestampNanos: UInt64 = UInt64(Date().timeIntervalSince1970 * 1e9),
+                          audio: AudioRequest = .suppressed) -> [UInt8] {
         let desc: [UInt8]
         if video {
             let res = fieldVarint(1, 1) + fieldVarint(2, 1) + fieldVarint(3, 50115) + fieldVarint(4, 0)
@@ -77,7 +91,7 @@ struct MediaOffer {
             desc = fieldBytes(5, d)
         } else {
             let d = fieldVarint(1, UInt64(sessionID)) + fieldVarint(2, 0) + fieldVarint(3, 0)
-                + fieldVarint(4, 1000) + fieldVarint(5, 0) + fieldVarint(6, 0)   // 1000: PT-101 bit clear = no audio
+                + fieldVarint(4, audio.preferredBitRate) + fieldVarint(5, 0) + fieldVarint(6, 0)
             desc = fieldBytes(3, d)
         }
         var f9 = [UInt8]()

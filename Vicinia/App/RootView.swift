@@ -16,6 +16,8 @@ struct RootView: View {
     @State private var user = UserDefaults.standard.string(forKey: "user") ?? ""
     @State private var password = ""
     @State private var notice: String?
+    /// This view's own window: a session is presented in the window that asked for it.
+    @State private var anchor = WindowAnchor()
 
     /// Width-driven adaptation: regular-width windows (full-screen iPad in any
     /// orientation) center the connection module; compact-width windows
@@ -30,6 +32,8 @@ struct RootView: View {
                 compactWidthLayout
             }
         }
+        .background(WindowReader(anchor: anchor))
+        .onAppear { notice = notice ?? Self.storeNotice(ProfileStore.shared.loadIssue) }
         #if (DEBUG && VICINIA_DEVELOPER_TOOLS) || VICINIA_MEASUREMENT_TOOLS
         .onAppear {
             #if DEBUG && VICINIA_DEVELOPER_TOOLS
@@ -55,6 +59,9 @@ struct RootView: View {
                     Button("Forget pinned host key", role: .destructive, action: forget)
                         .disabled(host.isEmpty)
                     if let notice { Text(notice).font(.footnote).foregroundStyle(.secondary) }
+                    if let error = ProfileStore.shared.lastWriteError {
+                        Text(error).font(.footnote).foregroundStyle(.secondary)
+                    }
                 }
                 #if DEBUG && VICINIA_DEVELOPER_TOOLS
                 Section("Recorded HPSS clips (Documents)") {
@@ -119,6 +126,10 @@ struct RootView: View {
                         Text(notice).font(.footnote).foregroundStyle(.secondary)
                             .multilineTextAlignment(.center)
                     }
+                    if let error = ProfileStore.shared.lastWriteError {
+                        Text(error).font(.footnote).foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                    }
                     #if DEBUG && VICINIA_DEVELOPER_TOOLS
                     developerToolsBox
                     #endif
@@ -159,12 +170,52 @@ struct RootView: View {
     #endif
 
     private func connect() {
-        UserDefaults.standard.set(host, forKey: "host")
-        UserDefaults.standard.set(user, forKey: "user")
-        let secret = SecretBytes(password)
-        password = ""                                   // credential lifetime: until consumed by SRP
-        present(SessionSource(id: "live-\(UUID().uuidString)", clipURL: nil,
-                              live: LiveRequest(host: host, username: user, password: secret)))
+        switch Self.reserveLiveSession(in: anchor.window) {
+        case .refused(let reason):
+            notice = reason                             // nothing saved, consumed or presented
+        case .reserved(let claim):
+            UserDefaults.standard.set(host, forKey: "host")
+            UserDefaults.standard.set(user, forKey: "user")
+            let secret = SecretBytes(password)
+            password = ""                               // credential lifetime: until consumed by SRP
+            let profile = ProfileStore.shared.binding(host: host, username: user)
+            let source = SessionSource(id: "live-\(UUID().uuidString)", clipURL: nil,
+                                       live: LiveRequest(host: host, username: user, password: secret,
+                                                         profile: profile, claim: claim))
+            if !SessionPresenter.present(source, in: anchor.window) {
+                secret.wipe()
+                LiveSessionSlot.shared.finish(claim)    // never presented: never started
+                notice = String(localized: "The session could not be opened in this window. Try again.")
+            }
+        }
+    }
+
+    enum Reservation: Equatable {
+        case reserved(LiveSessionSlot.Claim)
+        case refused(String)
+    }
+
+    /// The single-session claim for a request made in `window`, taken before
+    /// any side effect: refused when another window's session is live, or when
+    /// this window cannot present a session now.
+    static func reserveLiveSession(in window: UIWindow?, slot: LiveSessionSlot = .shared) -> Reservation {
+        guard SessionPresenter.presenter(in: window) != nil else {
+            return .refused(String(localized: "The session could not be opened in this window. Try again."))
+        }
+        guard let claim = slot.claim() else {
+            return .refused(String(localized: "Another Mac session is open in another window. Close it there before connecting here."))
+        }
+        return .reserved(claim)
+    }
+
+    /// Saved Mac settings that could not be read are kept, never overwritten; say so.
+    static func storeNotice(_ issue: ProfileStore.LoadIssue?) -> String? {
+        switch issue {
+        case .unreadable(let aside?): String(localized: "Saved Mac settings could not be read. They were kept as \(aside); defaults apply.")
+        case .unreadable(nil): String(localized: "Saved Mac settings could not be read. They were kept unchanged; defaults apply.")
+        case .newerSchema: String(localized: "Saved Mac settings come from a newer Vicinia. They are kept unchanged; changes are not saved.")
+        case nil: nil
+        }
     }
 
     private func forget() {
@@ -174,7 +225,7 @@ struct RootView: View {
     }
 
     private func present(_ source: SessionSource) {
-        SessionPresenter.present(source)
+        SessionPresenter.present(source, in: anchor.window)
     }
 
     #if DEBUG && VICINIA_DEVELOPER_TOOLS
@@ -200,4 +251,32 @@ struct RootView: View {
         }
     }
     #endif
+}
+
+/// The window that hosts a view, read from UIKit (SwiftUI does not expose it).
+@MainActor final class WindowAnchor {
+    weak var window: UIWindow?
+    /// A view's stored default: created wherever the view value is.
+    nonisolated init() {}
+}
+
+private struct WindowReader: UIViewRepresentable {
+    let anchor: WindowAnchor
+
+    func makeUIView(context: Context) -> AnchorView {
+        let view = AnchorView()
+        view.anchor = anchor
+        view.isUserInteractionEnabled = false
+        return view
+    }
+
+    func updateUIView(_ view: AnchorView, context: Context) { view.anchor = anchor }
+
+    final class AnchorView: UIView {
+        weak var anchor: WindowAnchor? { didSet { anchor?.window = window } }
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            anchor?.window = window
+        }
+    }
 }

@@ -113,10 +113,13 @@ enum ControlWrite {
     case message([UInt8])
     case input(RemoteInput, epoch: UInt64)
     case release
+    /// An accessory payload: sealed only while `token` is
+    /// still current, validated by the drain immediately before sealing.
+    case accessory([UInt8], AccessoryToken)
 
     var queuedByteCount: Int {
         switch self {
-        case .message(let bytes): bytes.count
+        case .message(let bytes), .accessory(let bytes, _): bytes.count
         case .input(.scroll(_, _, let count), _): min(64, max(0, count)) * 12
         case .input: 8
         case .release: 0 // no payload allocated until the drain sees current state
@@ -127,7 +130,7 @@ enum ControlWrite {
         let bytes: [UInt8]
         let wrapsInput: Bool
         switch self {
-        case .message(let message): bytes = message; wrapsInput = false
+        case .message(let message), .accessory(let message, _): bytes = message; wrapsInput = false
         case .input(let event, let epoch): bytes = input.encode(event, epoch: epoch); wrapsInput = true
         case .release: bytes = input.release(); wrapsInput = true
         }

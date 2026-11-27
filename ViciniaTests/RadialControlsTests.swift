@@ -2,8 +2,8 @@
 // orientation/size adaptation, common-ancestor gesture coordination,
 // outside-tap local dismissal without blocking remote desktop gestures,
 // two-finger double-tap over radial controls, inactivity timeout suppression,
-// pointer-lock handover, accessibility, Release HUD/Esc absence, and Escape
-// key preservation.
+// pointer-lock handover, accessibility, Release HUD/Esc absence, Escape
+// key preservation, and Mac audio coexistence.
 // SPDX-License-Identifier: MIT
 
 import Foundation
@@ -124,20 +124,24 @@ private func fireTapRecognizer(_ recognizer: UITapGestureRecognizer,
 
 @Suite("Radial menu layout and placement")
 struct RadialMenuLayoutTests {
-    @Test func diameterTargets180To220AndAdaptsToAvailableSpace() {
+    @Test(arguments: [false, true])
+    func diameterTargets180To220AndAdaptsToAvailableSpace(_ includesAudio: Bool) {
         let iPhoneLandscape = RadialMenuLayout(
             containerSize: CGSize(width: 912, height: 420),
             safeAreaInsets: EdgeInsets(top: 0, leading: 68, bottom: 20, trailing: 68),
-            anchor: CGPoint(x: 456, y: 210)
+            anchor: CGPoint(x: 456, y: 210),
+            includesAudio: includesAudio
         )
         #expect((180...220).contains(iPhoneLandscape.diameter))
+        #expect(iPhoneLandscape.commands.count == (includesAudio ? 4 : 3))
         #expect(iPhoneLandscape.hubDiameter >= 44 && iPhoneLandscape.itemDiameter >= 44)
         #expect(iPhoneLandscape.center == CGPoint(x: 456, y: 210))
 
         let iPadLandscape = RadialMenuLayout(
             containerSize: CGSize(width: 1194, height: 834),
             safeAreaInsets: EdgeInsets(top: 24, leading: 0, bottom: 20, trailing: 0),
-            anchor: CGPoint(x: 600, y: 420)
+            anchor: CGPoint(x: 600, y: 420),
+            includesAudio: includesAudio
         )
         #expect((180...220).contains(iPadLandscape.diameter))
         #expect(iPadLandscape.center == CGPoint(x: 600, y: 420))
@@ -146,6 +150,7 @@ struct RadialMenuLayoutTests {
             containerSize: CGSize(width: 420, height: 912),
             safeAreaInsets: EdgeInsets(top: 62, leading: 0, bottom: 34, trailing: 0),
             anchor: CGPoint(x: 210, y: 450),
+            includesAudio: includesAudio,
             isAccessibilityTextSize: true
         )
         #expect((180...220).contains(accessibility.diameter))
@@ -155,7 +160,8 @@ struct RadialMenuLayoutTests {
         let compact = RadialMenuLayout(
             containerSize: CGSize(width: 212, height: 212),
             safeAreaInsets: EdgeInsets(),
-            anchor: CGPoint(x: 106, y: 106)
+            anchor: CGPoint(x: 106, y: 106),
+            includesAudio: includesAudio
         )
         #expect(compact.diameter == 188)
         #expect(compact.hubDiameter >= 44 && compact.itemDiameter >= 44)
@@ -163,13 +169,15 @@ struct RadialMenuLayoutTests {
         let extreme = RadialMenuLayout(
             containerSize: CGSize(width: 160, height: 160),
             safeAreaInsets: EdgeInsets(),
-            anchor: CGPoint(x: 80, y: 80)
+            anchor: CGPoint(x: 80, y: 80),
+            includesAudio: includesAudio
         )
         #expect(extreme.hubDiameter >= 44 && extreme.itemDiameter >= 44)
         #expect(extreme.diameter <= 160)
     }
 
-    @Test func radialCommandsAreNonOverlappingAndContainedWithinMenuCircle() {
+    @Test(arguments: [false, true])
+    func radialCommandsAreNonOverlappingAndContainedWithinMenuCircle(_ includesAudio: Bool) {
         for (size, isAX) in [
             (CGSize(width: 912, height: 420), false),
             (CGSize(width: 420, height: 912), true),
@@ -180,11 +188,12 @@ struct RadialMenuLayoutTests {
                 containerSize: size,
                 safeAreaInsets: EdgeInsets(),
                 anchor: CGPoint(x: size.width / 2, y: size.height / 2),
+                includesAudio: includesAudio,
                 isAccessibilityTextSize: isAX
             )
             #expect(layout.hubDiameter >= 44 && layout.itemDiameter >= 44)
-            let commands = RadialMenuLayout.Command.allCases
-            #expect(commands.count == 3)
+            let commands = layout.commands
+            #expect(commands == (includesAudio ? [.options, .audio, .keyboard, .close] : [.options, .keyboard, .close]))
             for command in commands {
                 let c = layout.center(for: command)
                 let distFromHub = hypot(c.x - layout.center.x, c.y - layout.center.y)
@@ -201,7 +210,8 @@ struct RadialMenuLayoutTests {
         }
     }
 
-    @Test func clampsEdgeAndCornerAnchorsInsideSafeAreasInPortraitAndLandscape() {
+    @Test(arguments: [false, true])
+    func clampsEdgeAndCornerAnchorsInsideSafeAreasInPortraitAndLandscape(_ includesAudio: Bool) {
         let cases: [(CGSize, EdgeInsets)] = [
             (CGSize(width: 912, height: 420), EdgeInsets(top: 0, leading: 68, bottom: 20, trailing: 68)),   // iPhone landscape
             (CGSize(width: 420, height: 912), EdgeInsets(top: 62, leading: 0, bottom: 34, trailing: 0)),   // iPhone portrait
@@ -224,7 +234,12 @@ struct RadialMenuLayoutTests {
                 CGPoint(x: size.width + 40, y: size.height / 2),
             ]
             for anchor in anchors {
-                let layout = RadialMenuLayout(containerSize: size, safeAreaInsets: insets, anchor: anchor)
+                let layout = RadialMenuLayout(
+                    containerSize: size,
+                    safeAreaInsets: insets,
+                    anchor: anchor,
+                    includesAudio: includesAudio
+                )
                 #expect(safeRect.contains(layout.menuFrame))
                 #expect(layout.menuFrame.minX >= safeRect.minX + RadialMenuLayout.edgeMargin - 0.5)
                 #expect(layout.menuFrame.maxX <= safeRect.maxX - RadialMenuLayout.edgeMargin + 0.5)
@@ -234,12 +249,14 @@ struct RadialMenuLayoutTests {
         }
     }
 
-    @Test func orientationRotationReclampsPreviouslyAnchoredMenuInsideNewSafeArea() {
+    @Test(arguments: [false, true])
+    func orientationRotationReclampsPreviouslyAnchoredMenuInsideNewSafeArea(_ includesAudio: Bool) {
         let landscapeAnchor = CGPoint(x: 820, y: 200)
         let landscape = RadialMenuLayout(
             containerSize: CGSize(width: 912, height: 420),
             safeAreaInsets: EdgeInsets(top: 0, leading: 68, bottom: 20, trailing: 68),
-            anchor: landscapeAnchor
+            anchor: landscapeAnchor,
+            includesAudio: includesAudio
         )
         #expect(landscape.safeRect.contains(landscape.menuFrame))
 
@@ -247,7 +264,8 @@ struct RadialMenuLayoutTests {
         let portrait = RadialMenuLayout(
             containerSize: CGSize(width: 420, height: 912),
             safeAreaInsets: EdgeInsets(top: 62, leading: 0, bottom: 34, trailing: 0),
-            anchor: landscapeAnchor
+            anchor: landscapeAnchor,
+            includesAudio: includesAudio
         )
         #expect(portrait.safeRect.contains(portrait.menuFrame))
         #expect(portrait.center.x <= 420 - RadialMenuLayout.edgeMargin - portrait.radius + 0.5)
@@ -353,7 +371,7 @@ struct RadialToolbarStateTests {
     }
 
     /// Two-finger touch events over radial buttons
-    /// must never trigger Fit, Close, Dismiss, or open Retina's menu, while
+    /// must never trigger Options, Audio, Keyboard, Close, or Dismiss, while
     /// single-finger touches continue activating commands normally.
     @Test func multiTouchOverRadialControlsNeverActivatesCommandsAndSingleTapStillWorks() throws {
         let timers = ManualSchedule()
@@ -362,23 +380,24 @@ struct RadialToolbarStateTests {
         let layout = RadialMenuLayout(
             containerSize: CGSize(width: 800, height: 400),
             safeAreaInsets: EdgeInsets(),
-            anchor: CGPoint(x: 400, y: 200)
+            anchor: CGPoint(x: 400, y: 200),
+            includesAudio: true
         )
         var closes = 0
-        let container = RadialMenuContainerView(controller: controller, layout: layout) { closes += 1 }
+        let container = RadialMenuContainerView(controller: controller, layout: layout, showsAudio: true) { closes += 1 }
         container.layoutIfNeeded()
-        var fits = 0
-        container.fitButton.action = { fits += 1 }
 
         // Every radial control enables multi-touch so two fingers landing on
         // the same button are both forwarded to the ancestor toggle recognizer.
+        #expect(container.controls.count == 5)
+        let audioButton = try #require(container.audioButton)
         for control in container.controls {
             #expect(control.isMultipleTouchEnabled)
         }
 
         // Simulate a two-finger direct touch touching down and lifting over each control.
         let twoFingerButtons: [SessionToolbarControl] = [
-            container.fitButton, container.closeButton, container.dismissButton, container.menuButton
+            container.keyboardButton, container.closeButton, container.dismissButton, container.menuButton, audioButton
         ]
         for button in twoFingerButtons {
             let center = CGPoint(x: button.bounds.midX, y: button.bounds.midY)
@@ -390,17 +409,16 @@ struct RadialToolbarStateTests {
             if let menuButton = button as? SessionMenuControl, let interaction = menuButton.contextMenuInteraction {
                 #expect(menuButton.contextMenuInteraction(interaction, configurationForMenuAtLocation: center) == nil)
             }
+            if let audioControl = button as? AudioMenuControl, let interaction = audioControl.contextMenuInteraction {
+                #expect(audioControl.contextMenuInteraction(interaction, configurationForMenuAtLocation: center) == nil)
+            }
             let e1 = TouchSample(view: button, pointInView: center, type: .direct, phase: .ended)
             let e2 = TouchSample(view: container, pointInView: CGPoint(x: 20, y: 20), type: .direct, phase: .ended)
             button.touchesEnded([e1], with: TouchEventSample(touches: [e1, e2]))
         }
-        #expect(fits == 0 && closes == 0 && controller.toolbar.isVisible)
+        #expect(!controller.keyboardShown && closes == 0 && controller.toolbar.isVisible)
 
-        // Single-finger primary activation still works for Fit, Close, Dismiss, and Retina.
-        container.fitButton.sendActions(for: .touchDown)
-        container.fitButton.sendActions(for: .touchUpInside)
-        #expect(fits == 1 && controller.toolbar.isVisible)
-
+        // Single-finger primary activation still works for Close, Dismiss, and Keyboard.
         container.closeButton.sendActions(for: .touchDown)
         container.closeButton.sendActions(for: .touchUpInside)
         #expect(closes == 1)
@@ -408,13 +426,19 @@ struct RadialToolbarStateTests {
         container.dismissButton.sendActions(for: .touchDown)
         container.dismissButton.sendActions(for: .touchUpInside)
         #expect(!controller.toolbar.isVisible)
+
+        controller.toolbar.toggle(at: nil)
+        #expect(controller.toolbar.isVisible)
+        container.keyboardButton.sendActions(for: .touchDown)
+        container.keyboardButton.sendActions(for: .touchUpInside)
+        #expect(controller.keyboardShown && !controller.toolbar.isVisible)
     }
 }
 
 @Suite("Radial controls live view, gesture coordination, Release policy and Escape preservation", .serialized)
 @MainActor
 struct RadialControlsLiveViewTests {
-    /// Verification in a real UIWindow + SwiftUI/UIKit view hierarchy:
+    /// Gesture routing in an actual UIWindow with SwiftUI and UIKit views:
     /// - Outside points hit `DesktopView` directly (no blocking full-screen backdrop).
     /// - Common-ancestor coordinator owns outside single-tap dismissal and two-finger
     ///   double-tap across both `DesktopView` and all four radial buttons.
@@ -485,20 +509,20 @@ struct RadialControlsLiveViewTests {
         }
         // Points inside the circular medallion between buttons hit radialContainer (never DesktopView).
         let hubCenter = radialContainer.dismissButton.center
-        let ringGapBetweenHubAndRetina = CGPoint(
+        let ringGapBetweenHubAndOptions = CGPoint(
             x: hubCenter.x,
             y: (radialContainer.menuButton.frame.maxY + radialContainer.dismissButton.frame.minY) / 2
         )
         let gapLocal = CGPoint(x: hubCenter.x, y: hubCenter.y + (radialContainer.bounds.height * 0.30))
-        #expect(window.hitTest(radialContainer.convert(ringGapBetweenHubAndRetina, to: window), with: nil) === radialContainer)
+        #expect(window.hitTest(radialContainer.convert(ringGapBetweenHubAndOptions, to: window), with: nil) === radialContainer)
         let gapInWindow = radialContainer.convert(gapLocal, to: window)
         #expect(window.hitTest(gapInWindow, with: nil) === radialContainer)
 
-        // 3. Touch-reception filtering & recognizer failure dependencies.
+        // 3. Touch filtering and recognizer failure dependencies.
         let desktopTouch = TouchSample(view: desktop, pointInView: desktop.convert(outsidePoint, from: window))
         let desktopMouseTouch = TouchSample(view: desktop, pointInView: desktop.convert(outsidePoint, from: window), type: .indirectPointer)
         let menuTouch = TouchSample(view: radialContainer.menuButton, pointInView: CGPoint(x: 32, y: 32))
-        let fitTouch = TouchSample(view: radialContainer.fitButton, pointInView: CGPoint(x: 32, y: 32))
+        let keyboardTouch = TouchSample(view: radialContainer.keyboardButton, pointInView: CGPoint(x: 32, y: 32))
         let closeTouch = TouchSample(view: radialContainer.closeButton, pointInView: CGPoint(x: 32, y: 32))
         let dismissTouch = TouchSample(view: radialContainer.dismissButton, pointInView: CGPoint(x: 24, y: 24))
         let ringGapTouch = TouchSample(view: radialContainer, pointInView: gapLocal)
@@ -507,7 +531,7 @@ struct RadialControlsLiveViewTests {
         #expect(coordinator.gestureRecognizer(coordinator.outsideDismissTap, shouldReceive: desktopTouch))
         #expect(coordinator.gestureRecognizer(coordinator.outsideDismissTap, shouldReceive: desktopMouseTouch))
         #expect(!coordinator.gestureRecognizer(coordinator.outsideDismissTap, shouldReceive: menuTouch))
-        #expect(!coordinator.gestureRecognizer(coordinator.outsideDismissTap, shouldReceive: fitTouch))
+        #expect(!coordinator.gestureRecognizer(coordinator.outsideDismissTap, shouldReceive: keyboardTouch))
         #expect(!coordinator.gestureRecognizer(coordinator.outsideDismissTap, shouldReceive: closeTouch))
         #expect(!coordinator.gestureRecognizer(coordinator.outsideDismissTap, shouldReceive: dismissTouch))
         #expect(!coordinator.gestureRecognizer(coordinator.outsideDismissTap, shouldReceive: ringGapTouch))
@@ -530,7 +554,7 @@ struct RadialControlsLiveViewTests {
         #expect(coordinator.radialTwoFingerDoubleTap.numberOfTapsRequired == 2)
         #expect(coordinator.radialTwoFingerDoubleTap.allowedTouchTypes == [NSNumber(value: UITouch.TouchType.direct.rawValue)])
         #expect(coordinator.radialTwoFingerDoubleTap.delaysTouchesEnded && coordinator.radialTwoFingerDoubleTap.cancelsTouchesInView)
-        for touch in [desktopTouch, menuTouch, fitTouch, closeTouch, dismissTouch, ringGapTouch] {
+        for touch in [desktopTouch, menuTouch, keyboardTouch, closeTouch, dismissTouch, ringGapTouch] {
             #expect(coordinator.gestureRecognizer(coordinator.radialTwoFingerDoubleTap, shouldReceive: touch))
         }
         #expect(coordinator.gestureRecognizer(coordinator.radialTwoFingerDoubleTap, shouldBeRequiredToFailBy: desktop.toolbarToggleRecognizer))
@@ -547,10 +571,10 @@ struct RadialControlsLiveViewTests {
             #expect(coordinator.gestureRecognizer(coordinator.radialTwoFingerDoubleTap, shouldBeRequiredToFailBy: recognizer) == !isLongHold)
         }
 
-        // Pressing a radial control or opening the Retina menu suspends outside tap dismissal.
-        radialContainer.fitButton.sendActions(for: .touchDown)
+        // Pressing a radial control or opening the Options menu suspends outside tap dismissal.
+        radialContainer.keyboardButton.sendActions(for: .touchDown)
         #expect(!coordinator.gestureRecognizer(coordinator.outsideDismissTap, shouldReceive: desktopTouch))
-        radialContainer.fitButton.sendActions(for: .touchCancel)
+        radialContainer.keyboardButton.sendActions(for: .touchCancel)
         #expect(coordinator.gestureRecognizer(coordinator.outsideDismissTap, shouldReceive: desktopTouch))
         controller.toolbar.setMenuOpen(true)
         #expect(!coordinator.gestureRecognizer(coordinator.outsideDismissTap, shouldReceive: desktopTouch))
@@ -719,56 +743,80 @@ struct RadialControlsLiveViewTests {
         let dismissButton = try #require(findViews(SessionDismissButton.self, in: host.view).first)
         let radialContainer = try #require(findViews(RadialMenuContainerView.self, in: host.view).first)
 
-        // Exactly three radial commands (Retina, Fit, Close) plus central dismiss hub; never Esc or HUD.
-        #expect(menuButton.configuration?.title == "Retina")
-        #expect(Set(actionButtons.compactMap { $0.configuration?.title }) == ["Fit", "Close"])
+        // Non-live session (no live audio): exactly three radial commands (Options, Keyboard, Close)
+        // plus central dismiss hub; exact SF Symbols; never Audio, Fit, Esc, or HUD on the ring.
+        #expect(menuButton.configuration?.title == "Options")
+        #expect(menuButton.radialSymbolName == "gearshape" && menuButton.configuration?.image != nil)
+        #expect(findViews(AudioMenuControl.self, in: host.view).isEmpty)
+        #expect(Set(actionButtons.compactMap { $0.configuration?.title }) == ["Keyboard", "Close"])
         #expect(actionButtons.count == 2)
+        #expect(!actionButtons.contains { $0.configuration?.title == "Fit" })
         #expect(!actionButtons.contains { $0.configuration?.title == "Esc" })
         #expect(!actionButtons.contains { $0.configuration?.title?.contains("HUD") == true })
 
-        // Accessibility labels, hints, traversal order, Escape action, and minimum 44x44 targets.
-        let fitButton = try #require(actionButtons.first { $0.configuration?.title == "Fit" })
+        // Accessibility labels, values, hints, identifiers, SF Symbols, traversal order, and >= 44x44 targets.
+        let keyboardButton = try #require(actionButtons.first { $0.configuration?.title == "Keyboard" })
         let closeButton = try #require(actionButtons.first { $0.configuration?.title == "Close" })
-        #expect(menuButton.accessibilityLabel == "Retina")
-        #expect(menuButton.accessibilityHint == "Opens display, input and keyboard options.")
-        #expect(fitButton.accessibilityLabel == "Fit")
-        #expect(fitButton.accessibilityHint == "Shows the whole remote desktop.")
+        #expect(keyboardButton.radialSymbolName == "keyboard" && keyboardButton.configuration?.image != nil)
+        #expect(closeButton.radialSymbolName == "rectangle.portrait.and.arrow.right" && closeButton.configuration?.image != nil)
+        #expect(dismissButton.radialSymbolName == "xmark" && dismissButton.configuration?.image != nil)
+        #expect(menuButton.accessibilityLabel == "Options")
+        #expect(menuButton.accessibilityIdentifier == "radial.options")
+        #expect(menuButton.accessibilityHint == "Opens display, fit and input options.")
+        #expect(keyboardButton.accessibilityLabel == "Keyboard")
+        #expect(keyboardButton.accessibilityIdentifier == "radial.keyboard")
+        #expect(keyboardButton.accessibilityValue == "Hidden")
+        #expect(keyboardButton.accessibilityHint == "Shows the on-screen keyboard.")
+        #expect(!keyboardButton.accessibilityTraits.contains(.selected))
         #expect(closeButton.accessibilityLabel == "Close")
         #expect(closeButton.accessibilityHint == "Ends the session.")
         #expect(dismissButton.accessibilityLabel == "Dismiss session controls")
         #expect(dismissButton.isEnabled)
-        #expect((radialContainer.accessibilityElements as? [NSObject]) == [menuButton, fitButton, closeButton, dismissButton])
-        for control in [menuButton as UIView, fitButton, closeButton, dismissButton] {
+        #expect((radialContainer.accessibilityElements as? [NSObject]) == [menuButton, keyboardButton, closeButton, dismissButton])
+        for control in [menuButton as UIView, keyboardButton, closeButton, dismissButton] {
             #expect(control.bounds.width >= 44 && control.bounds.height >= 44)
         }
 
-        // Retina menu preserves all existing actions.
-        let menuTitles = menuButton.menu?.children.map(\.title)
-        #expect(menuTitles == ["Retina", "More Space", "Local pan (one finger)", "Input", "Keyboard"])
+        // Options menu contains Retina, More Space, Fit, Local pan, Input — never Keyboard or Audio.
+        let menuItems = try #require(menuButton.menu?.children)
+        #expect(menuItems.map(\.title) == ["Retina", "More Space", "Fit", "Local pan (one finger)", "Input"])
+        #expect(!menuItems.contains { $0.title == "Keyboard" })
+        #expect((menuItems[0] as? UIAction)?.state == .on && (menuItems[1] as? UIAction)?.state == .off)
         controller.setProfile(.moreSpace)
-        try #require(await settleWindow(window) { menuButton.configuration?.title == "More Space" })
-        #expect(menuButton.accessibilityLabel == "More Space")
+        try #require(await settleWindow(window) {
+            (menuButton.menu?.children[1] as? UIAction)?.state == .on
+        })
+        #expect(menuButton.configuration?.title == "Options")
+        #expect(menuButton.accessibilityLabel == "Options")
+        #expect((menuButton.menu?.children[0] as? UIAction)?.state == .off)
 
-        // Fit executes controller.fit() and keeps the menu open with a fresh 5s timeout.
+        // Fit inside Options executes controller.fit() and keeps the menu open with a fresh 5s timeout.
         let renderer = try #require(controller.renderer)
         renderer.zoom = 2.5
-        fitButton.sendActions(for: .touchDown)
-        fitButton.sendActions(for: .touchUpInside)
+        let fitAction = try #require(menuButton.menu?.children.compactMap { $0 as? UIAction }.first { $0.title == "Fit" })
+        fitAction.performWithSender(nil, target: nil)
         #expect(renderer.zoom == 1 && controller.toolbar.isVisible && timers.live.count == 1)
 
-        // Close executes onClose.
+        // Close executes onClose (distinct from central X dismissal).
         closeButton.sendActions(for: .touchDown)
         closeButton.sendActions(for: .touchUpInside)
-        #expect(closed == 1)
+        #expect(closed == 1 && controller.toolbar.isVisible)
 
-        // VoiceOver Escape gesture on radial container dismisses cleanly.
-        #expect(radialContainer.accessibilityPerformEscape())
+        // Keyboard opens the software keyboard and immediately dismisses radial controls
+        // without dismissing the newly opened software keyboard.
+        keyboardButton.sendActions(for: .touchDown)
+        keyboardButton.sendActions(for: .touchUpInside)
         try #require(await settleWindow(window) {
-            !controller.toolbar.isVisible && findViews(SessionMenuControl.self, in: host.view).isEmpty
+            !controller.toolbar.isVisible
+                && findViews(RadialMenuContainerView.self, in: host.view).isEmpty
+                && desktop.keyboardShown
         })
-        #expect(remoteInputs.isEmpty)
+        #expect(controller.keyboardShown && desktop.keyboardShown)
+        #expect(desktop.inputView == nil && desktop.inputAccessoryView != nil)
+        #expect(timers.live.isEmpty && remoteInputs.isEmpty)
 
-        // Re-open near top-left edge via two-finger double tap: clamps inside safe areas.
+        // Re-open near top-left edge via two-finger double tap: clamps inside safe areas
+        // and Keyboard reflects the open state through accessibility.
         let edgeTap = TapSample()
         edgeTap.point = CGPoint(x: 10, y: 10)
         edgeTap.send(to: desktop, "toolbarToggled:")
@@ -780,23 +828,53 @@ struct RadialControlsLiveViewTests {
         })
         let reopenedDismiss = try #require(findViews(SessionDismissButton.self, in: host.view).first)
         let reopenedMenu = try #require(findViews(SessionMenuControl.self, in: host.view).first)
-        let reopenedFit = try #require(findViews(SessionActionButton.self, in: host.view).first { $0.configuration?.title == "Fit" })
+        let reopenedKeyboard = try #require(findViews(SessionActionButton.self, in: host.view).first { $0.configuration?.title == "Keyboard" })
         let reopenedClose = try #require(findViews(SessionActionButton.self, in: host.view).first { $0.configuration?.title == "Close" })
+        #expect(reopenedKeyboard.accessibilityValue == "Shown")
+        #expect(reopenedKeyboard.accessibilityHint == "Hides the on-screen keyboard.")
+        #expect(reopenedKeyboard.accessibilityTraits.contains(.selected))
         let safeRect = window.bounds.inset(by: insets)
-        for control in [reopenedDismiss as UIView, reopenedMenu, reopenedFit, reopenedClose] {
+        for control in [reopenedDismiss as UIView, reopenedMenu, reopenedKeyboard, reopenedClose] {
             let rect = control.convert(control.bounds, to: window)
             #expect(safeRect.contains(rect))
         }
 
-        // Central hub dismissal hides the menu locally with zero remote input.
-        let dismissCenter = reopenedDismiss.convert(CGPoint(x: reopenedDismiss.bounds.midX, y: reopenedDismiss.bounds.midY), to: window)
-        #expect(window.hitTest(dismissCenter, with: nil)?.isDescendant(of: reopenedDismiss) == true)
-        reopenedDismiss.sendActions(for: .touchDown)
-        reopenedDismiss.sendActions(for: .touchUpInside)
+        // Activating Keyboard again hides the software keyboard and dismisses radial controls.
+        reopenedKeyboard.sendActions(for: .touchDown)
+        reopenedKeyboard.sendActions(for: .touchUpInside)
+        try #require(await settleWindow(window) {
+            !controller.toolbar.isVisible
+                && findViews(RadialMenuContainerView.self, in: host.view).isEmpty
+                && !desktop.keyboardShown
+        })
+        #expect(!controller.keyboardShown && !desktop.keyboardShown)
+        #expect(desktop.inputView != nil && desktop.inputAccessoryView == nil)
+
+        // Re-open and verify VoiceOver Escape gesture and central X hub dismiss locally with zero remote input.
+        edgeTap.send(to: desktop, "toolbarToggled:")
+        try #require(await settleWindow(window) { findViews(RadialMenuContainerView.self, in: host.view).count == 1 })
+        let escapeContainer = try #require(findViews(RadialMenuContainerView.self, in: host.view).first)
+        #expect(escapeContainer.accessibilityPerformEscape())
+        try #require(await settleWindow(window) {
+            !controller.toolbar.isVisible && findViews(SessionMenuControl.self, in: host.view).isEmpty
+        })
+        #expect(remoteInputs.isEmpty && closed == 1)
+
+        edgeTap.send(to: desktop, "toolbarToggled:")
+        try #require(await settleWindow(window) {
+            guard let dismiss = findViews(SessionDismissButton.self, in: host.view).first else { return false }
+            let center = dismiss.convert(CGPoint(x: dismiss.bounds.midX, y: dismiss.bounds.midY), to: window)
+            return window.hitTest(center, with: nil)?.isDescendant(of: dismiss) == true
+        })
+        let finalDismiss = try #require(findViews(SessionDismissButton.self, in: host.view).first)
+        let dismissCenter = finalDismiss.convert(CGPoint(x: finalDismiss.bounds.midX, y: finalDismiss.bounds.midY), to: window)
+        #expect(window.hitTest(dismissCenter, with: nil)?.isDescendant(of: finalDismiss) == true)
+        finalDismiss.sendActions(for: .touchDown)
+        finalDismiss.sendActions(for: .touchUpInside)
         try #require(await settleWindow(window) {
             !controller.toolbar.isVisible && findViews(SessionDismissButton.self, in: host.view).isEmpty
         })
-        #expect(remoteInputs.isEmpty)
+        #expect(remoteInputs.isEmpty && closed == 1)
         #expect(window.hitTest(dismissCenter, with: nil) === desktop)
 
         // Remote desktop gestures work normally once dismissed.
@@ -849,7 +927,7 @@ struct RadialControlsLiveViewTests {
             return dismissRect.width >= 44 && dismissRect.height >= 44 && dismissRect.midY > safeRect.midY
         })
         let controls: [UIView] = findViews(SessionToolbarControl.self, in: host.view)
-        #expect(controls.count == 4) // Retina, Fit, Close, Center Dismiss
+        #expect(controls.count == 4) // Options, Keyboard, Close, Center Dismiss
         for control in controls {
             let rect = control.convert(control.bounds, to: window)
             #expect(rect.width >= 44 && rect.height >= 44)
@@ -943,5 +1021,532 @@ struct RadialControlsLiveViewTests {
         let escItem = try #require(bar.items?.first { $0.title == "Esc" })
         _ = view.perform(NSSelectorFromString("accessory:"), with: escItem)
         #expect(keys.count == 2 && keys[0] == (0xff1b, true) && keys[1] == (0xff1b, false))
+    }
+
+    /// An external first-responder dismissal (e.g. iPadOS system keyboard dismiss
+    /// key or sheet takeover) clears both `DesktopView.keyboardShown` and
+    /// `SessionController.keyboardShown` without fighting UIKit's resignation, so
+    /// the radial Keyboard control stays truthful and re-opens on the very next tap.
+    @Test func externalFirstResponderDismissalClearsKeyboardStateAndAllowsImmediateReopen() async throws {
+        let scene = try #require(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = SafeAreaTestWindow(
+            windowScene: scene,
+            frame: CGRect(x: 0, y: 0, width: 912, height: 420),
+            safeAreaInsets: UIEdgeInsets(top: 0, left: 68, bottom: 20, right: 68)
+        )
+        let timers = ManualSchedule(), controller = SessionController(toolbar: makeRadialToolbar(timers))
+        let host = SessionHostingController(rootView: SessionView(
+            source: SessionSource(id: "radial-keyboard-dismissal", clipURL: nil),
+            controller: controller,
+            onClose: {}
+        ))
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true; window.rootViewController = nil }
+
+        try #require(await settleWindow(window) {
+            findViews(SessionActionButton.self, in: host.view).count == 2
+                && controller.toolbar.stage == .established
+        })
+        let desktop = try #require(findViews(DesktopView.self, in: host.view).first)
+        let keyboardButton = try #require(findViews(SessionActionButton.self, in: host.view).first { $0.configuration?.title == "Keyboard" })
+
+        // Open keyboard via radial Keyboard command (dismisses radial controls immediately).
+        keyboardButton.sendActions(for: .touchDown)
+        keyboardButton.sendActions(for: .touchUpInside)
+        try #require(await settleWindow(window) {
+            !controller.toolbar.isVisible && desktop.keyboardShown && desktop.isFirstResponder
+        })
+        #expect(controller.keyboardShown && desktop.keyboardShown && desktop.isFirstResponder)
+
+        // Simulate external first-responder resignation (e.g. iPadOS keyboard dismiss key).
+        let resigned = desktop.resignFirstResponder()
+        #expect(resigned)
+        #expect(!desktop.isFirstResponder)
+        #expect(!desktop.keyboardShown && !controller.keyboardShown)
+
+        // Re-open radial menu: Keyboard truthfully reports Hidden and single tap immediately re-opens.
+        controller.toolbar.toggle(at: nil)
+        try #require(await settleWindow(window) {
+            findViews(SessionActionButton.self, in: host.view).count == 2
+        })
+        let reopenedKeyboard = try #require(findViews(SessionActionButton.self, in: host.view).first { $0.configuration?.title == "Keyboard" })
+        #expect(reopenedKeyboard.accessibilityValue == "Hidden")
+        #expect(!reopenedKeyboard.accessibilityTraits.contains(.selected))
+
+        reopenedKeyboard.sendActions(for: .touchDown)
+        reopenedKeyboard.sendActions(for: .touchUpInside)
+        try #require(await settleWindow(window) {
+            !controller.toolbar.isVisible && desktop.keyboardShown && desktop.isFirstResponder
+        })
+        #expect(controller.keyboardShown && desktop.keyboardShown && desktop.isFirstResponder)
+    }
+}
+
+/// Four-command radial controls and Mac audio coexistence:
+/// verifies that audio-capable live sessions present four independent radial
+/// commands (Options, Audio, Keyboard, Close) plus center dismiss hub, keeps audio
+/// settings out of Options, exposes audio controls and state via the
+/// first-class Audio command, preserves per-Mac persistence and recovery, and
+/// leaves audio/session lifetime undisturbed across radial visibility cycles.
+@Suite("Radial controls and Mac audio coexistence", .serialized)
+@MainActor
+struct RadialAudioCoexistenceTests {
+    /// Distinct loopback IPv4 literal so `HostKeyPinStore` never races with
+    /// `SessionControlTests` (`127.0.0.1`) while `MediaTransport.bind` stays literal IPv4.
+    private static let pinHost = "127.0.0.77"
+
+    private func eventually(_ timeout: Duration = .seconds(5), _ condition: @Sendable () async -> Bool) async -> Bool {
+        let deadline = ContinuousClock.now + timeout
+        while ContinuousClock.now < deadline {
+            if await condition() { return true }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return await condition()
+    }
+
+    private func settle(_ window: UIWindow, timeout: Duration = .seconds(8), until condition: () -> Bool) async -> Bool {
+        let deadline = ContinuousClock.now + timeout
+        repeat {
+            window.layoutIfNeeded()
+            if condition() { return true }
+            try? await Task.sleep(for: .milliseconds(20))
+        } while ContinuousClock.now < deadline
+        return condition()
+    }
+
+    @Test func audioAttentionNoticeUsesRadialControlsWordingAndPreservesConditions() {
+        for state: AudioPipeline.State in [.interrupted(.system), .interrupted(.routeLost), .interrupted(.mediaServices)] {
+            #expect(state.needsAttention && state.canResume)
+            #expect(state.notice.contains("Resume it from Audio in session controls."))
+            #expect(!state.notice.localizedCaseInsensitiveContains("toolbar"))
+            #expect(state.statusBadge == .attention && state.statusBadge.symbolName == "exclamationmark")
+        }
+        let failed = AudioPipeline.State.failed("Audio output unavailable.")
+        #expect(failed.needsAttention && failed.canResume)
+        #expect(failed.notice == "Audio output unavailable. The desktop is not affected.")
+        #expect(failed.statusBadge == .attention && failed.statusBadge.symbolName == "exclamationmark")
+        #expect(AudioPipeline.State.playing.statusBadge == .active && AudioPipeline.State.playing.statusBadge.symbolName == "waveform")
+        #expect(AudioPipeline.State.negotiating.statusBadge == .negotiating && AudioPipeline.State.negotiating.statusBadge.symbolName == "ellipsis")
+        #expect(AudioPipeline.State.muted.statusBadge == .muted && AudioPipeline.State.muted.statusBadge.symbolName == "speaker.slash.fill")
+        #expect(AudioPipeline.State.disabled.statusBadge == .inactive && AudioPipeline.State.disabled.statusBadge.symbolName == "minus")
+        #expect(AudioPipeline.State.unavailable.statusBadge == .inactive && AudioPipeline.State.unavailable.statusBadge.symbolName == "minus")
+        // Non-color-only invariant: every distinct visual status category has a unique SF Symbol glyph.
+        let distinctBadges: [AudioPipeline.State.StatusBadge] = [.active, .negotiating, .muted, .inactive, .attention]
+        #expect(Set(distinctBadges.map(\.symbolName)).count == distinctBadges.count)
+        for calm: AudioPipeline.State in [.disabled, .negotiating, .playing, .muted, .unavailable] {
+            #expect(!calm.needsAttention && !calm.canResume)
+        }
+    }
+
+    @Test func optionsExcludesAudioAndKeyboardAndAudioControlUsesMusicNoteAndSuspendsTimeout() throws {
+        let timers = ManualSchedule()
+        let controller = SessionController(toolbar: makeRadialToolbar(timers))
+        controller.toolbar.sessionEstablished(offeringHint: false)
+
+        let optionsButton = SessionMenuControl(controller: controller)
+        #expect(optionsButton.configuration?.title == "Options")
+        #expect(optionsButton.radialSymbolName == "gearshape" && optionsButton.configuration?.image != nil)
+        #expect(optionsButton.accessibilityLabel == "Options")
+        #expect(optionsButton.accessibilityIdentifier == "radial.options")
+        let optionItems = try #require(optionsButton.menu?.children)
+        #expect(optionItems.map(\.title) == ["Retina", "More Space", "Fit", "Local pan (one finger)", "Input"])
+        #expect(!optionItems.contains { $0.title.localizedCaseInsensitiveContains("audio") })
+        #expect(!optionItems.contains { $0.title.localizedCaseInsensitiveContains("keyboard") })
+
+        let audioButton = AudioMenuControl(controller: controller)
+        #expect(audioButton.configuration?.title == "Audio")
+        #expect(audioButton.radialSymbolName == "music.note" && audioButton.configuration?.image != nil)
+        #expect(audioButton.accessibilityLabel == "Mac audio")
+        #expect(audioButton.accessibilityHint == "Opens Mac audio options.")
+        #expect(audioButton.accessibilityIdentifier == "radial.audio")
+        #expect(audioButton.showsLargeContentViewer)
+        let initialMenu = try #require(audioButton.menu)
+        audioButton.refresh()
+        #expect(audioButton.menu === initialMenu)
+
+        // Pressing Audio and opening its menu suspend the 5-second auto-hide timer.
+        let deadline = try #require(timers.live.first)
+        let interaction = try #require(audioButton.contextMenuInteraction)
+        audioButton.sendActions(for: .touchDown)
+        #expect(controller.toolbar.isControlPressed && deadline.cancelled && timers.live.isEmpty)
+        audioButton.contextMenuInteraction(interaction, willDisplayMenuFor: UIContextMenuConfiguration(), animator: nil)
+        audioButton.sendActions(for: .touchCancel)
+        #expect(controller.toolbar.isMenuOpen && !controller.toolbar.isControlPressed && timers.live.isEmpty)
+        timers.fire(deadline)
+        #expect(controller.toolbar.isVisible)
+        audioButton.contextMenuInteraction(interaction, willEndFor: UIContextMenuConfiguration(), animator: nil)
+        #expect(!controller.toolbar.isMenuOpen && timers.live.count == 1 && timers.live.first?.delay == .seconds(5))
+    }
+
+    @Test(arguments: [
+        (CGSize(width: 420, height: 912), UIEdgeInsets(top: 62, left: 0, bottom: 34, right: 0), false),
+        (CGSize(width: 912, height: 420), UIEdgeInsets(top: 0, left: 68, bottom: 20, right: 68), false),
+        (CGSize(width: 834, height: 1194), UIEdgeInsets(top: 24, left: 0, bottom: 20, right: 0), false),
+        (CGSize(width: 1194, height: 834), UIEdgeInsets(top: 24, left: 0, bottom: 20, right: 0), false),
+        (CGSize(width: 420, height: 912), UIEdgeInsets(top: 62, left: 0, bottom: 34, right: 0), true),
+    ])
+    func fourCommandLayoutAdaptsAcrossOrientationsDeviceSizesAndAccessibilityText(
+        _ size: CGSize, _ insets: UIEdgeInsets, _ isAX5: Bool
+    ) async throws {
+        let scene = try #require(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = SafeAreaTestWindow(windowScene: scene, frame: CGRect(origin: .zero, size: size), safeAreaInsets: insets)
+        let timers = ManualSchedule(), controller = SessionController(toolbar: makeRadialToolbar(timers))
+        controller.toolbar.sessionEstablished(offeringHint: false)
+        let baseOverlay = SessionRadialControlsOverlay(controller: controller, showsAudio: true, onClose: {})
+        let rootView: AnyView = isAX5
+            ? AnyView(baseOverlay.environment(\.dynamicTypeSize, .accessibility5))
+            : AnyView(baseOverlay)
+        let host = UIHostingController(rootView: rootView)
+        window.rootViewController = host
+        window.isHidden = false
+        defer { window.isHidden = true; window.rootViewController = nil }
+
+        try #require(await settleWindow(window) {
+            findViews(SessionToolbarControl.self, in: host.view).count == 5
+                && findViews(AudioMenuControl.self, in: host.view).count == 1
+        })
+
+        // Re-open anchored at the bottom-right corner and verify safe-area containment & zero overlap.
+        controller.toolbar.dismiss()
+        try #require(await settleWindow(window) { findViews(SessionToolbarControl.self, in: host.view).isEmpty })
+        controller.toolbar.toggle(at: CGPoint(x: size.width, y: size.height))
+        let safeRect = window.bounds.inset(by: insets)
+        try #require(await settleWindow(window) {
+            let current = findViews(SessionToolbarControl.self, in: host.view)
+            guard current.count == 5, let dismiss = findViews(SessionDismissButton.self, in: host.view).first else { return false }
+            let rect = dismiss.convert(dismiss.bounds, to: window)
+            return rect.width >= 44 && rect.height >= 44 && rect.midY > safeRect.midY
+        })
+
+        let controls = findViews(SessionToolbarControl.self, in: host.view)
+        let frames = controls.map { $0.convert($0.bounds, to: window) }
+        for frame in frames {
+            #expect(frame.width >= 44 && frame.height >= 44)
+            #expect(safeRect.contains(frame))
+        }
+        for i in 0..<frames.count {
+            for j in (i + 1)..<frames.count {
+                let a = frames[i], b = frames[j]
+                let distance = hypot(a.midX - b.midX, a.midY - b.midY)
+                #expect(distance >= (a.width + b.width) / 2 + 2)
+            }
+        }
+        let union = frames.reduce(CGRect.null) { $0.union($1) }
+        #expect(union.width <= 220 && union.height <= 220)
+
+        // Rotate live and confirm all 5 controls stay inside the rotated safe area.
+        let rotated = CGSize(width: size.height, height: size.width)
+        let rotatedInsets = UIEdgeInsets(top: insets.left, left: insets.top, bottom: insets.right, right: insets.bottom)
+        window.customSafeAreaInsets = rotatedInsets
+        window.frame = CGRect(origin: .zero, size: rotated)
+        host.view.setNeedsLayout()
+        let rotatedSafeRect = window.bounds.inset(by: rotatedInsets)
+        try #require(await settleWindow(window) {
+            let current = findViews(SessionToolbarControl.self, in: host.view)
+            return current.count == 5 && current.allSatisfy { rotatedSafeRect.contains($0.convert($0.bounds, to: window)) }
+        })
+    }
+
+    @Test func liveSessionFourCommandRadialMenuExposesFirstClassAudioAndPreservesV2Behavior() async throws {
+        try? HostKeyPinStore.forget(host: Self.pinHost)
+        let directory = FileManager.default.temporaryDirectory.appending(path: "vicinia-radial-audio-\(UUID().uuidString)")
+        let store = ProfileStore(directory: directory, legacyDefaults: nil)
+        let binding = store.binding(host: Self.pinHost, username: "tester")
+        let other = store.binding(host: "other.invalid", username: "tester")
+        other.save(ProfilePreferences(audio: AudioPreference(enabled: true)))
+
+        let hostServer = try FakeHost(behavior: .valid)
+        let peer = FakeControlPeer()
+        hostServer.afterAuthentication = { channel, key in await peer.serve(channel, wrapKey: key) }
+        let port = try await hostServer.start()
+        let channel = ControlChannel(host: "127.0.0.1", port: port)
+        let timers = ManualSchedule()
+        let defaults = TestDefaults()
+        let audioSession = FakeAudioSession()
+        let controller = SessionController(
+            channel: channel,
+            evidence: EvidenceLog(),
+            toolbar: makeRadialToolbar(timers, defaults: defaults.defaults),
+            makeAudio: { AudioPipeline(enabled: $0, session: audioSession, output: .offline) },
+            slot: LiveSessionSlot()  // parallel suites: not the app's single-session owner
+        )
+
+        let scene = try #require(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let insets = UIEdgeInsets(top: 0, left: 68, bottom: 20, right: 68)
+        let window = SafeAreaTestWindow(
+            windowScene: scene,
+            frame: CGRect(x: 0, y: 0, width: 912, height: 420),
+            safeAreaInsets: insets
+        )
+        var closes = 0
+        let liveSource = SessionSource(
+            id: "radial-live-audio",
+            clipURL: nil,
+            live: LiveRequest(host: Self.pinHost, username: "tester", password: SecretBytes("correct horse"), profile: binding)
+        )
+        let viewHost = SessionHostingController(rootView: SessionView(
+            source: liveSource,
+            controller: controller,
+            onClose: { closes += 1 }
+        ))
+        window.rootViewController = viewHost
+        window.isHidden = false
+
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+            controller.stop()
+            hostServer.stop()
+            defaults.remove()
+            try? FileManager.default.removeItem(at: directory)
+            try? HostKeyPinStore.forget(host: Self.pinHost)
+        }
+
+        // Lay out the hosting window so `DesktopSurface` attaches, reports geometry, and starts live auth
+        // (allow >3s in case the simulator scene starts in portrait and `startLive` waits out its 3s landscape grace).
+        try #require(await settle(window, timeout: .seconds(8)) { controller.trustPrompt != nil })
+        controller.resolveTrust(true)
+        try #require(await settle(window, timeout: .seconds(4)) { controller.phase == .awaitingRandomAccess })
+
+        // Establish the first presented desktop.
+        let session = try #require(controller.session)
+        let layout = StripeLayout(rule: .codedStack, stripeCount: 4, canvasWidth: 2328, canvasHeight: 1200,
+                                  pictureWidth: 2336, pictureHeight: 304, cropTop: 0, visibleHeight: 304)
+        let mailbox = controller.mailbox
+        try #require(await eventually(.seconds(3)) {
+            mailbox.reset(generation: 11, layout: layout)
+            await session.markPresented(DesktopPresentation(generation: 11, offerID: 1,
+                                                            geometry: FakeControlPeer.geometry,
+                                                            nanos: DispatchTime.now().uptimeNanoseconds))
+            return await MainActor.run { controller.inputReady && controller.phase == .streaming }
+        })
+        let audio = try #require(controller.audio)
+        try #require(await eventually(.seconds(3)) { audio.snapshot.running && audio.snapshot.accepting })
+        try #require(await settleWindow(window) {
+            findViews(RadialMenuContainerView.self, in: viewHost.view).count == 1
+                && findViews(AudioMenuControl.self, in: viewHost.view).count == 1
+                && controller.toolbar.stage == .established
+                && controller.audioState == .negotiating
+        })
+
+        // 1. Live audio-capable session presents four radial commands (Options, Audio, Keyboard, Close)
+        //    plus center dismiss hub with exact SF Symbols — zero Fit, Esc, or HUD on the ring.
+        let container = try #require(findViews(RadialMenuContainerView.self, in: viewHost.view).first)
+        let controls = findViews(SessionToolbarControl.self, in: viewHost.view)
+        let optionsButton = try #require(findViews(SessionMenuControl.self, in: viewHost.view).first)
+        let audioButton = try #require(findViews(AudioMenuControl.self, in: viewHost.view).first)
+        let actionButtons = findViews(SessionActionButton.self, in: viewHost.view)
+        let dismissButton = try #require(findViews(SessionDismissButton.self, in: viewHost.view).first)
+        let keyboardButton = try #require(actionButtons.first { $0.configuration?.title == "Keyboard" })
+        let closeButton = try #require(actionButtons.first { $0.configuration?.title == "Close" })
+        #expect(controls.count == 5)
+        #expect(optionsButton.configuration?.title == "Options" && optionsButton.radialSymbolName == "gearshape")
+        #expect(audioButton.configuration?.title == "Audio" && audioButton.radialSymbolName == "music.note")
+        #expect(keyboardButton.configuration?.title == "Keyboard" && keyboardButton.radialSymbolName == "keyboard")
+        #expect(closeButton.configuration?.title == "Close" && closeButton.radialSymbolName == "rectangle.portrait.and.arrow.right")
+        #expect(dismissButton.radialSymbolName == "xmark")
+        #expect(controls.allSatisfy { $0.configuration?.image != nil })
+        #expect(Set(actionButtons.compactMap { $0.configuration?.title }) == ["Keyboard", "Close"])
+        #expect(!actionButtons.contains { $0.configuration?.title == "Fit" })
+        #expect(!actionButtons.contains { $0.configuration?.title == "Esc" })
+        #expect(!actionButtons.contains { $0.configuration?.title?.contains("HUD") == true })
+        #expect((container.accessibilityElements as? [NSObject]) == [optionsButton, audioButton, keyboardButton, closeButton, dismissButton])
+
+        // Options contains Retina, More Space, Fit, Local pan, Input — NO Audio, NO Keyboard.
+        // A live session adds the Clipboard submenu last, with explicit send and receive commands.
+        let optionItems = try #require(optionsButton.menu?.children)
+        #expect(optionItems.map(\.title) == ["Retina", "More Space", "Fit", "Local pan (one finger)", "Input", "Clipboard"])
+        #expect((optionItems.last as? UIMenu)?.children.map(\.title) == ["Send Clipboard to Mac…", "Get Mac Clipboard", "Sync Automatically"])
+        #expect((optionItems[0] as? UIAction)?.state == .on && (optionItems[1] as? UIAction)?.state == .off)
+        #expect(!optionItems.contains { $0.title.localizedCaseInsensitiveContains("audio") })
+        #expect(!optionItems.contains { $0.title.localizedCaseInsensitiveContains("keyboard") })
+        let renderer = try #require(controller.renderer)
+        renderer.zoom = 2.0
+        let fitAction = try #require(optionItems[2] as? UIAction)
+        fitAction.performWithSender(nil, target: nil)
+        #expect(renderer.zoom == 1 && controller.toolbar.isVisible)
+
+        // 2. Geometry, safe-area containment, zero overlap, hit-testing, and gesture coexistence
+        //    across all 5 controls (including first-class Audio).
+        let safeRect = window.bounds.inset(by: insets)
+        let frames = controls.map { $0.convert($0.bounds, to: window) }
+        for frame in frames {
+            #expect(frame.width >= 44 && frame.height >= 44)
+            #expect(safeRect.contains(frame))
+        }
+        for i in 0..<frames.count {
+            for j in (i + 1)..<frames.count {
+                let a = frames[i], b = frames[j]
+                let distance = hypot(a.midX - b.midX, a.midY - b.midY)
+                #expect(distance >= (a.width + b.width) / 2 + 2)
+            }
+        }
+        let desktop = try #require(findViews(DesktopView.self, in: viewHost.view).first)
+        let coordinator = try #require(container.gestureCoordinator)
+        let audioCenterInWindow = audioButton.convert(CGPoint(x: audioButton.bounds.midX, y: audioButton.bounds.midY), to: window)
+        #expect(window.hitTest(audioCenterInWindow, with: nil)?.isDescendant(of: audioButton) == true)
+        let diagonalGapLocal = CGPoint(
+            x: container.bounds.midX + container.bounds.width * 0.24,
+            y: container.bounds.midY + container.bounds.height * 0.24
+        )
+        #expect(window.hitTest(container.convert(diagonalGapLocal, to: window), with: nil) === container)
+        let audioTouch = TouchSample(view: audioButton, pointInView: CGPoint(x: audioButton.bounds.midX, y: audioButton.bounds.midY))
+        let desktopTouch = TouchSample(view: desktop, pointInView: desktop.convert(CGPoint(x: 120, y: 300), from: window))
+        #expect(coordinator.gestureRecognizer(coordinator.radialTwoFingerDoubleTap, shouldReceive: audioTouch))
+        #expect(!coordinator.gestureRecognizer(coordinator.outsideDismissTap, shouldReceive: audioTouch))
+        audioButton.sendActions(for: .touchDown)
+        #expect(!coordinator.gestureRecognizer(coordinator.outsideDismissTap, shouldReceive: desktopTouch))
+        audioButton.sendActions(for: .touchCancel)
+        #expect(coordinator.gestureRecognizer(coordinator.outsideDismissTap, shouldReceive: desktopTouch))
+
+        // 3. First-class Audio command keeps `music.note`, renders a compact non-color-only
+        //    status badge inside its bounds, and supports Mute/Unmute, first-tap Resume Audio
+        //    on route loss, and per-Mac preference persistence.
+        try #require(await settleWindow(window) {
+            audioButton.accessibilityValue == "Waiting for audio from the Mac"
+        })
+        #expect(!audioButton.statusBadgeView.isHidden)
+        #expect(!audioButton.statusBadgeView.isUserInteractionEnabled)
+        #expect(!audioButton.statusBadgeView.isAccessibilityElement)
+        #expect(audioButton.bounds.contains(audioButton.statusBadgeView.frame))
+        #expect(audioButton.radialSymbolName == "music.note")
+        #expect(audioButton.statusBadge == .negotiating && audioButton.statusBadgeSymbolName == "ellipsis")
+        let initialActions = try #require(audioButton.menu?.children as? [UIAction])
+        #expect(audioButton.menu?.title == "Mac Audio: Waiting for audio from the Mac")
+        #expect(initialActions.map(\.title) == ["Play Mac Audio", "Mute"])
+        #expect(initialActions[0].state == .on && !initialActions[0].attributes.contains(.disabled))
+        #expect(initialActions[1].state == .off && !initialActions[1].attributes.contains(.disabled))
+
+        // Mute via the Audio radial command updates state, badge glyph, and restarts 5s dismissal.
+        let beforeMuteTimer = try #require(timers.live.first { $0.delay == SessionToolbar.autoHideDelay })
+        initialActions[1].performWithSender(nil, target: nil)
+        let afterMuteTimers = timers.live.filter { $0.delay == SessionToolbar.autoHideDelay }
+        #expect(beforeMuteTimer.cancelled && afterMuteTimers.count == 1)
+        try #require(await eventually(.seconds(2)) { await controller.audioState == .muted })
+        try #require(await settleWindow(window) { audioButton.accessibilityValue == "Muted" })
+        #expect(audioButton.radialSymbolName == "music.note")
+        #expect(audioButton.statusBadge == .muted && audioButton.statusBadgeSymbolName == "speaker.slash.fill")
+        #expect(controller.audioMuted)
+        // Unmute again.
+        let mutedActions = try #require(audioButton.menu?.children as? [UIAction])
+        mutedActions[1].performWithSender(nil, target: nil)
+        try #require(await eventually(.seconds(2)) { await controller.audioState == .negotiating })
+        #expect(!controller.audioMuted)
+
+        // Trigger a route-loss interruption: attention badge appears, Resume Audio recovers on first tap.
+        audio.enqueueSystemEvent(.routeLost)
+        audio.sync()
+        try #require(await eventually(.seconds(2)) { await controller.audioState == .interrupted(.routeLost) })
+        try #require(await settleWindow(window) {
+            audioButton.menu?.children.map(\.title).first == "Resume Audio"
+        })
+        #expect(audioButton.radialSymbolName == "music.note")
+        #expect(audioButton.statusBadge == .attention && audioButton.statusBadgeSymbolName == "exclamationmark")
+        let interruptedActions = try #require(audioButton.menu?.children as? [UIAction])
+        #expect(interruptedActions.map(\.title) == ["Resume Audio", "Play Mac Audio", "Mute"])
+        interruptedActions[0].performWithSender(nil, target: nil)
+        try #require(await eventually(.seconds(2)) {
+            let state = await controller.audioState
+            return audio.snapshot.running && audio.snapshot.accepting && state == .negotiating
+        })
+        try #require(await settleWindow(window) {
+            audioButton.menu?.children.map(\.title) == ["Play Mac Audio", "Mute"]
+        })
+        #expect(audioButton.statusBadge == .negotiating && audioButton.statusBadgeSymbolName == "ellipsis")
+
+        // Disable Mac Audio via Play Mac Audio: shows inactive badge and persists only for this Mac's profile.
+        let playingActions = try #require(audioButton.menu?.children as? [UIAction])
+        playingActions[0].performWithSender(nil, target: nil)
+        try #require(await eventually(.seconds(2)) { await controller.audioState == .disabled })
+        #expect(store.profile(binding.profileID)?.preferences.audio == AudioPreference(enabled: false))
+        #expect(store.profile(other.profileID)?.preferences.audio == AudioPreference(enabled: true))
+        try #require(await settleWindow(window) { audioButton.accessibilityValue == "Off" })
+        #expect(audioButton.radialSymbolName == "music.note")
+        #expect(audioButton.statusBadge == .inactive && audioButton.statusBadgeSymbolName == "minus")
+        // Re-enable before radial lifecycle checks.
+        let disabledActions = try #require(audioButton.menu?.children as? [UIAction])
+        disabledActions[0].performWithSender(nil, target: nil)
+        try #require(await eventually(.seconds(2)) { audio.snapshot.running && audio.snapshot.accepting })
+        // Feed real AAC-ELD frames to verify the live `.playing` -> `.active` ("waveform") badge too.
+        for i in 0..<3 {
+            let pkt = AudioPacket(sequence: UInt16(i + 1), timestamp: UInt32(i * 480), ssrc: 9,
+                                  payload: Data(AudioFixture.accessUnits[i]),
+                                  arrival: UInt64(i) * 10_000_000, mediaGeneration: 1)
+            #expect(audio.accept(pkt))
+            audio.sync()
+        }
+        try #require(await eventually(.seconds(2)) { await controller.audioState == .playing })
+        try #require(await settleWindow(window) { audioButton.accessibilityValue == "Playing" })
+        #expect(audioButton.radialSymbolName == "music.note")
+        #expect(audioButton.statusBadge == .active && audioButton.statusBadgeSymbolName == "waveform")
+
+        // 4. First-class Keyboard command opens software keyboard, immediately dismisses radial
+        //    controls without dismissing the keyboard or disturbing audio/session lifetime, and toggles closed again.
+        let lifetime = try #require(controller.lifetime)
+        let originalAuth = try #require(lifetime.authorization)
+        #expect(audioButton.radialSymbolName == "music.note")
+        keyboardButton.sendActions(for: .touchDown)
+        keyboardButton.sendActions(for: .touchUpInside)
+        try #require(await settleWindow(window) {
+            !controller.toolbar.isVisible
+                && findViews(RadialMenuContainerView.self, in: viewHost.view).isEmpty
+                && desktop.keyboardShown
+        })
+        #expect(controller.keyboardShown && desktop.keyboardShown && desktop.inputView == nil && desktop.inputAccessoryView != nil)
+        #expect(lifetime.authorization == originalAuth && audio.snapshot.running && audio.snapshot.accepting)
+
+        let tap = TapSample()
+        tap.point = CGPoint(x: 300, y: 200)
+        tap.send(to: desktop, "toolbarToggled:")
+        try #require(await settleWindow(window) {
+            controller.toolbar.isVisible
+                && findViews(RadialMenuContainerView.self, in: viewHost.view).count == 1
+                && findViews(AudioMenuControl.self, in: viewHost.view).count == 1
+        })
+        let reopenedKeyboard = try #require(findViews(SessionActionButton.self, in: viewHost.view).first { $0.configuration?.title == "Keyboard" })
+        #expect(reopenedKeyboard.accessibilityValue == "Shown" && reopenedKeyboard.accessibilityTraits.contains(.selected))
+        reopenedKeyboard.sendActions(for: .touchDown)
+        reopenedKeyboard.sendActions(for: .touchUpInside)
+        try #require(await settleWindow(window) {
+            !controller.toolbar.isVisible
+                && findViews(RadialMenuContainerView.self, in: viewHost.view).isEmpty
+                && !desktop.keyboardShown
+        })
+        #expect(!controller.keyboardShown && !desktop.keyboardShown)
+        #expect(lifetime.authorization == originalAuth && audio.snapshot.running && audio.snapshot.accepting)
+
+        // 5. Radial visibility cycles (re-open, outside dismiss, 5s auto-hide)
+        //    never revoke SessionLifetime or stop AudioPipeline.
+        tap.send(to: desktop, "toolbarToggled:")
+        try #require(await settleWindow(window) {
+            controller.toolbar.isVisible && findViews(RadialMenuContainerView.self, in: viewHost.view).count == 1
+        })
+        let reopenedContainer = try #require(findViews(RadialMenuContainerView.self, in: viewHost.view).first)
+        let reopenedCoordinator = try #require(reopenedContainer.gestureCoordinator)
+        fireTapRecognizer(reopenedCoordinator.outsideDismissTap, on: reopenedCoordinator, selector: "handleOutsideDismissTap:", at: CGPoint(x: 120, y: 300))
+        try #require(await settleWindow(window) { !controller.toolbar.isVisible && findViews(RadialMenuContainerView.self, in: viewHost.view).isEmpty })
+        #expect(lifetime.authorization == originalAuth && audio.snapshot.running && audio.snapshot.accepting)
+
+        tap.send(to: desktop, "toolbarToggled:")
+        try #require(await settleWindow(window) {
+            controller.toolbar.isVisible && findViews(RadialMenuContainerView.self, in: viewHost.view).count == 1
+        })
+        let autoHide = try #require(timers.live.first { $0.delay == SessionToolbar.autoHideDelay })
+        timers.fire(autoHide)
+        try #require(await settleWindow(window) { !controller.toolbar.isVisible && findViews(RadialMenuContainerView.self, in: viewHost.view).isEmpty })
+        #expect(lifetime.authorization == originalAuth && audio.snapshot.running && audio.snapshot.accepting)
+
+        // 6. Radial Close invokes onClose cleanly (distinct from central X dismiss).
+        tap.send(to: desktop, "toolbarToggled:")
+        try #require(await settleWindow(window) { findViews(SessionActionButton.self, in: viewHost.view).count == 2 })
+        let reopenedClose = try #require(findViews(SessionActionButton.self, in: viewHost.view).first { $0.configuration?.title == "Close" })
+        reopenedClose.sendActions(for: .touchDown)
+        reopenedClose.sendActions(for: .touchUpInside)
+        #expect(closes == 1)
+
+        await store.flush()
+        await session.disconnect()
+        await channel.close()
     }
 }

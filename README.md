@@ -6,6 +6,26 @@ network. It uses Apple's High Performance Screen Sharing (HPSS) protocol.
 You can work on your Mac directly from the touchscreen or use a keyboard,
 mouse or trackpad.
 
+## Vicinia 2.0 Alpha
+
+This experimental branch introduces remote audio playback and bidirectional clipboard synchronization.
+
+Vicinia 2.0 is under active development. Features and behavior may change before the stable release.
+
+For the current stable version, see the `main` branch.
+
+### What's new in 2.0 Alpha
+
+- Remote audio playback with audio/video synchronization.
+- Manual and opt-in automatic bidirectional clipboard synchronization.
+- Updated radial session controls with dedicated Audio and Keyboard menus.
+
+Clipboard synchronization supports text, web URLs, rich text, HTML, and images within payload and dimension limits. Rich-text interoperability may vary between applications. File transfers are not yet supported.
+
+The observed HPSS clipboard exchange does not provide a confirmed request/reply correlation mechanism. Under certain conditions, a late reply may replace local clipboard content with stale remote data. See [HPSS Protocol Documentation](Docs/HPSS_PROTOCOL.md) for further details.
+
+This Alpha build has passed automated simulator tests and device-build verification. Physical-device and real-Mac interoperability testing of this public build has not yet been performed.
+
 ## Features
 
 - High Performance Screen Sharing in Adaptive mode.

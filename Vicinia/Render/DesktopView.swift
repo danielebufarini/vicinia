@@ -56,6 +56,7 @@ final class DesktopView: UIView, UIKeyInput, UIGestureRecognizerDelegate, UIPoin
     override class var layerClass: AnyClass { CAMetalLayer.self }
     var metalLayer: CAMetalLayer { layer as! CAMetalLayer }
     var onGeometry: ((ViewportGeometry) -> Void)?
+    var onWindowSceneChanged: ((UIWindowScene?) -> Void)?
     var onZoom: ((CGFloat, CGPoint, CGPoint) -> Void)?
     var onPan: ((CGPoint) -> Void)?
     var onKeyboardShown: ((Bool) -> Void)?
@@ -95,8 +96,13 @@ final class DesktopView: UIView, UIKeyInput, UIGestureRecognizerDelegate, UIPoin
     }
     var trackpad = true { didSet { if oldValue != trackpad { cancelInput() } } }
     var panEnabled = false { didSet { if oldValue != panEnabled { cancelInput() } } }
+    private var isResigningFirstResponder = false
     var keyboardShown = false {
-        didSet { if oldValue != keyboardShown { reloadInputViews(); becomeFirstResponder() } }
+        didSet {
+            guard oldValue != keyboardShown else { return }
+            reloadInputViews()
+            if !isResigningFirstResponder { becomeFirstResponder() }
+        }
     }
     private var dragging = false
     private var holdDragging = false
@@ -215,7 +221,7 @@ final class DesktopView: UIView, UIKeyInput, UIGestureRecognizerDelegate, UIPoin
         addInteraction(UIPointerInteraction(delegate: self))
         isAccessibilityElement = true
         accessibilityLabel = String(localized: "Remote Mac desktop")
-        accessibilityHint = String(localized: "Shows or hides the session toolbar.")
+        accessibilityHint = String(localized: "Shows or hides the session controls.")
         NotificationCenter.default.addObserver(self, selector: #selector(pointerLockChanged), name: UIPointerLockState.didChangeNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(bindMice), name: .GCMouseDidConnect, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(mouseDisconnected), name: .GCMouseDidDisconnect, object: nil)
@@ -225,7 +231,17 @@ final class DesktopView: UIView, UIKeyInput, UIGestureRecognizerDelegate, UIPoin
     @objc private func mouseDisconnected() { cancelInput(); bindMice() }
     @objc private func focusLost() { cancelInput() }
     @objc private func pointerLockChanged() { cancelPointer() }
-    override func resignFirstResponder() -> Bool { cancelInput(); return super.resignFirstResponder() }
+    override func resignFirstResponder() -> Bool {
+        cancelInput()
+        let resigned = super.resignFirstResponder()
+        if resigned, keyboardShown {
+            isResigningFirstResponder = true
+            keyboardShown = false
+            isResigningFirstResponder = false
+            onKeyboardShown?(false)
+        }
+        return resigned
+    }
 
     @objc private func pinchChanged(_ g: UIPinchGestureRecognizer) {
         switch g.state {
@@ -374,7 +390,7 @@ final class DesktopView: UIView, UIKeyInput, UIGestureRecognizerDelegate, UIPoin
 
     override var accessibilityCustomActions: [UIAccessibilityCustomAction]? {
         get {
-            let name = toolbarVisible ? String(localized: "Hide session toolbar") : String(localized: "Show session toolbar")
+            let name = toolbarVisible ? String(localized: "Hide session controls") : String(localized: "Show session controls")
             return [UIAccessibilityCustomAction(name: name) { [weak self] _ in self?.toggleToolbarForAccessibility() ?? false }]
         }
         set {}
@@ -390,7 +406,13 @@ final class DesktopView: UIView, UIKeyInput, UIGestureRecognizerDelegate, UIPoin
         return true
     }
 
-    override func didMoveToWindow() { super.didMoveToWindow(); report(); if window != nil { becomeFirstResponder() } else { cancelInput() }; bindMice() }
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        onWindowSceneChanged?(window?.windowScene)
+        report()
+        if window != nil { becomeFirstResponder() } else { cancelInput() }
+        bindMice()
+    }
 
     override func layoutSubviews() {
         super.layoutSubviews()

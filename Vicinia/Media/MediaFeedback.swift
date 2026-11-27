@@ -64,16 +64,32 @@ enum RTCPBuild {
 
     /// (ssrc, middle 32 bits of NTP) for each SR in a compound RTCP packet.
     static func senderReports(_ p: Data) -> [(UInt32, UInt32)] {
+        senderReportClocks(p).map { ($0.ssrc, $0.middleNTP) }
+    }
+
+    struct SenderReportClock: Sendable {
+        let ssrc: UInt32, ntpSeconds: UInt32, ntpFraction: UInt32, rtpTimestamp: UInt32
+        var ntp: UInt64 { UInt64(ntpSeconds) << 32 | UInt64(ntpFraction) }
+        var middleNTP: UInt32 { UInt32(truncatingIfNeeded: ntp >> 16) }
+    }
+
+    /// The sender clocks of each SR in a compound RTCP packet: the NTP wall
+    /// clock and the RTP timestamp that corresponds to it (RFC 3550 §6.4.1).
+    static func senderReportClocks(_ p: Data) -> [SenderReportClock] {
         let b = [UInt8](p)
-        var out: [(UInt32, UInt32)] = [], pos = 0
+        var out: [SenderReportClock] = [], pos = 0
         while pos + 4 <= b.count {
             let words = (Int(b[pos + 2]) << 8) | Int(b[pos + 3])
             let length = (words + 1) * 4
-            guard length > 0, pos + length <= b.count else { break }
-            if b[pos + 1] == 200, length >= 28 {
+            let flags = b[pos]
+            guard flags >> 6 == 2, pos + length <= b.count else { break }
+            let pad = flags & 0x20 != 0 ? Int(b[pos + length - 1]) : 0
+            if flags & 0x20 != 0, pad == 0 || pad > length - 4 || pos + length != b.count { break }
+            let reportCount = Int(flags & 0x1F)
+            if b[pos + 1] == 200, length - pad >= 28 + 24 * reportCount {
                 var r = ByteReader(b, offset: pos + 4)
-                if let ssrc = try? r.u32(), let sec = try? r.u32(), let frac = try? r.u32() {
-                    out.append((ssrc, (sec & 0xFFFF) << 16 | (frac >> 16)))
+                if let ssrc = try? r.u32(), let sec = try? r.u32(), let frac = try? r.u32(), let rtp = try? r.u32() {
+                    out.append(SenderReportClock(ssrc: ssrc, ntpSeconds: sec, ntpFraction: frac, rtpTimestamp: rtp))
                 }
             }
             pos += length

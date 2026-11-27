@@ -557,13 +557,13 @@ struct ToolbarInputArbitrationTests {
     @Test func accessibilityElementOffersALocalToggleAndNeverClicksTheMac() throws {
         let (view, inputs, toggles) = recordingView()
         #expect(view.isAccessibilityElement && view.accessibilityLabel == "Remote Mac desktop")
-        #expect(view.accessibilityHint == "Shows or hides the session toolbar.")
+        #expect(view.accessibilityHint == "Shows or hides the session controls.")
         view.toolbarVisible = true
         let hide = try #require(view.accessibilityCustomActions?.first)
-        #expect(hide.name == "Hide session toolbar" && view.accessibilityCustomActions?.count == 1)
+        #expect(hide.name == "Hide session controls" && view.accessibilityCustomActions?.count == 1)
         #expect(hide.actionHandler?(hide) == true)
         view.toolbarVisible = false
-        #expect(view.accessibilityCustomActions?.first?.name == "Show session toolbar")
+        #expect(view.accessibilityCustomActions?.first?.name == "Show session controls")
         #expect(view.accessibilityPerformMagicTap())
         #expect(view.accessibilityActivate())
         #expect(toggles() == 3 && inputs().isEmpty)
@@ -641,7 +641,7 @@ struct ToolbarControlTests {
         let controller = SessionController(toolbar: makeToolbar(timers))
         controller.toolbar.sessionEstablished(offeringHint: false)
         let button = SessionMenuControl(controller: controller)
-        #expect(button.configuration?.title == "Retina" && button.showsMenuAsPrimaryAction)
+        #expect(button.configuration?.title == "Options" && button.accessibilityLabel == "Options" && button.showsMenuAsPrimaryAction)
         let interaction = try #require(button.contextMenuInteraction)
         button.contextMenuInteraction(interaction, willDisplayMenuFor: UIContextMenuConfiguration(), animator: nil)
         #expect(controller.toolbar.isMenuOpen && timers.live.isEmpty)
@@ -652,18 +652,21 @@ struct ToolbarControlTests {
         button.refresh()
         #expect(button.menu === menu) // an unrelated update keeps the (possibly open) menu
         let items = menu.children
-        #expect(items.map(\.title) == ["Retina", "More Space", "Local pan (one finger)", "Input", "Keyboard"])
-        let input = try #require(items[3] as? UIMenu)
+        #expect(items.map(\.title) == ["Retina", "More Space", "Fit", "Local pan (one finger)", "Input"])
+        #expect((items[0] as? UIAction)?.state == .on && (items[1] as? UIAction)?.state == .off)
+        #expect((items[2] as? UIAction) != nil)
+        #expect((items[3] as? UIAction)?.state == .off)
+        let input = try #require(items[4] as? UIMenu)
         #expect(input.options.contains(.singleSelection) && input.subtitle == "Trackpad")
         #expect((input.children as? [UIAction])?.map(\.state) == [.on, .off])
-        #expect((items[2] as? UIAction)?.state == .off && (items[4] as? UIAction)?.state == .off)
         controller.panEnabled = true; controller.trackpad = false; controller.keyboardShown = true
         controller.setProfile(.moreSpace)
         button.refresh()
         let updated = try #require(button.menu?.children)
-        #expect(button.configuration?.title == "More Space" && (updated[3] as? UIMenu)?.subtitle == "Direct")
-        #expect(((updated[3] as? UIMenu)?.children as? [UIAction])?.map(\.state) == [.off, .on])
-        #expect((updated[2] as? UIAction)?.state == .on && (updated[4] as? UIAction)?.state == .on)
+        #expect(button.configuration?.title == "Options" && (updated[4] as? UIMenu)?.subtitle == "Direct")
+        #expect((updated[0] as? UIAction)?.state == .off && (updated[1] as? UIAction)?.state == .on)
+        #expect((updated[3] as? UIAction)?.state == .on)
+        #expect(((updated[4] as? UIMenu)?.children as? [UIAction])?.map(\.state) == [.off, .on])
     }
 }
 
@@ -726,23 +729,28 @@ struct ToolbarRenderingInvariantTests {
             #expect(layer.drawableSize == drawable)
         }
 
-        // A press on the real Fit button that outlasts the deadline, then succeeds.
+        // A press on the real Keyboard button that outlasts the deadline, then
+        // cancels outside; Fit inside Options resets zoom and restarts the timeout.
         var buttons: [SessionActionButton] = []
         func collect(_ view: UIView) {
             if let button = view as? SessionActionButton { buttons.append(button) }
             view.subviews.forEach(collect)
         }
         collect(host.view)
-        #expect(buttons.compactMap { $0.configuration?.title } == ["Fit", "Close"])
-        let fit = try #require(buttons.first { $0.configuration?.title == "Fit" })
-        let renderer = try #require(controller.renderer)
-        renderer.zoom = 2
+        #expect(buttons.compactMap { $0.configuration?.title } == ["Keyboard", "Close"])
+        let keyboard = try #require(buttons.first { $0.configuration?.title == "Keyboard" })
         let deadline = try #require(timers.live.first)
-        fit.sendActions(for: .touchDown)
+        keyboard.sendActions(for: .touchDown)
         timers.fire(deadline)
         try #require(await settle(window) { desktop.toolbarVisible })
-        fit.sendActions(for: .touchUpInside) // UIButton turns this into its primary action
-        #expect(renderer.zoom == 1 && !controller.toolbar.isControlPressed && timers.live.count == 1)
+        keyboard.sendActions(for: .touchUpOutside)
+        #expect(!controller.keyboardShown && !controller.toolbar.isControlPressed && timers.live.count == 1)
+
+        let renderer = try #require(controller.renderer)
+        renderer.zoom = 2
+        let fitAction = try #require(menu.menu?.children.compactMap { $0 as? UIAction }.first { $0.title == "Fit" })
+        fitAction.performWithSender(nil, target: nil)
+        #expect(renderer.zoom == 1 && desktop.toolbarVisible && timers.live.count == 1)
 
         func settled(visible: Bool) async throws {
             try #require(await settle(window) {

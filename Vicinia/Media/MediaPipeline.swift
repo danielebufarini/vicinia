@@ -97,6 +97,7 @@ final class MediaPipeline: @unchecked Sendable {
     let counters = MediaCounters()
     private let mailbox: DesktopUpdateMailbox
     private let evidence: EvidenceLog
+    private let avClock: AVClockCorrelator?
     private var stripeCount: Int
     private var canvas: (width: Int, height: Int)?
     private var geometry: DesktopGeometry?
@@ -149,7 +150,8 @@ final class MediaPipeline: @unchecked Sendable {
     static let updateSettleNanos: UInt64 = 5_000_000
 
     init(ssrcToStripe: [UInt32: Int], canvas: (width: Int, height: Int)?,
-         ruleOverride: StripeLayout.Rule?, mailbox: DesktopUpdateMailbox, evidence: EvidenceLog) {
+         ruleOverride: StripeLayout.Rule?, mailbox: DesktopUpdateMailbox, evidence: EvidenceLog,
+         avClock: AVClockCorrelator? = nil) {
         let map = ssrcToStripe
         self.stripeCount = (map.values.max() ?? 0) + 1
         self.canvas = canvas
@@ -157,6 +159,7 @@ final class MediaPipeline: @unchecked Sendable {
         self.ruleOverride = ruleOverride
         self.mailbox = mailbox
         self.evidence = evidence
+        self.avClock = avClock
         assembler = HEVCAssembler(stripeForSSRC: { map[$0] })
     }
 
@@ -165,10 +168,10 @@ final class MediaPipeline: @unchecked Sendable {
     func configureStream(canvas: (Int, Int), stripeCount: Int, ssrcToStripe: [UInt32: Int],
                          geometry: DesktopGeometry? = nil, offerID: UInt64 = 0) {
         dispatchPrecondition(condition: .onQueue(queue))
+        self.offerID = offerID
         resetStream()
         self.canvas = (canvas.0, canvas.1)
         self.geometry = geometry
-        self.offerID = offerID
         self.stripeCount = stripeCount
         updateStripeMap(ssrcToStripe)
         evidence.set("media.canvas", "\(canvas.0)x\(canvas.1) stripes \(stripeCount)")
@@ -284,8 +287,7 @@ final class MediaPipeline: @unchecked Sendable {
     /// a new generation makes every older callback and committed update obsolete.
     func resetStream() {
         dispatchPrecondition(condition: .onQueue(queue))
-        generation += 1
-        mailbox.reset(generation: generation, layout: nil)
+        retireGeneration()
         decoder?.invalidate()
         decoder = nil
         vps = nil; sps = nil; pps = [:]
@@ -500,9 +502,16 @@ final class MediaPipeline: @unchecked Sendable {
         decoder.decode(au, vclNALs: vcl, now: DispatchTime.now().uptimeNanoseconds)
     }
 
-    private func rebuildDecoder(vps: Data, sps: Data) {
+    private func retireGeneration() {
         generation += 1
+        // Retire timing first so a callback that already passed the
+        // mailbox check cannot restore the previous local offset.
+        avClock?.videoGenerationChanged(offer: offerID, generation: generation)
         mailbox.reset(generation: generation, layout: nil)
+    }
+
+    private func rebuildDecoder(vps: Data, sps: Data) {
+        retireGeneration()
         decoder?.invalidate()
         decoder = nil
         awaitingRandomAccess = true

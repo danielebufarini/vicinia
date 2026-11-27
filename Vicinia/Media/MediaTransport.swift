@@ -7,8 +7,9 @@
 // RR every 0.5 s (+ empty SR every 5 s) on the video leg, audio RR every 1 s,
 // RCTL every 50 ms alone in its datagram, rate-limited FIR/PLI/legacy-FIR.
 // libsrtp with per-SSRC replay windows (SRTP and SRTCP),
-// audio authenticated and discarded, packets buffered until the stripe group
-// and canvas are known, feeding the shared MediaPipeline.
+// authenticated PT-101 audio handed to the session's AudioPipeline (discarded
+// when it accepts none), video packets buffered until the stripe group and
+// canvas are known, feeding the shared MediaPipeline.
 
 import Foundation
 import Network
@@ -34,7 +35,8 @@ final class MediaTransport: @unchecked Sendable {
     struct Counters: Sendable {
         var videoDatagrams = 0, audioDatagrams = 0, rtcpIn = 0
         var srtpAuthFailures = 0, srtpReplays = 0, srtpOtherErrors = 0, srtcpFailures = 0
-        var audioDiscarded = 0, nonHEVCVideo = 0, bufferedBeforeResolution = 0, bufferOverflow = 0
+        var audioDiscarded = 0, audioForwarded = 0, nonAACAudio = 0
+        var nonHEVCVideo = 0, bufferedBeforeResolution = 0, bufferOverflow = 0
         var rctlSent = 0, rrSent = 0, heartbeatsSent = 0, firSent = 0, sendErrors = 0
         #if DEBUG || VICINIA_MEASUREMENT_TOOLS
         var ltrpAcksSent = 0, ltrpAckFailures = 0
@@ -51,6 +53,7 @@ final class MediaTransport: @unchecked Sendable {
 
     let queue: DispatchQueue
     private let pipeline: MediaPipeline
+    private let audio: AudioPipeline?
     private let evidence: EvidenceLog
     private let tiles: Int
     private var videoConnection: NWConnection?
@@ -62,7 +65,8 @@ final class MediaTransport: @unchecked Sendable {
     private var pending: [(Data, UInt64)] = []
     private var seenSSRCs: [UInt32: Int] = [:]
     private var extendedSeq: [UInt32: (seq: UInt16, roc: UInt32)] = [:]
-    private var hostSR: [UInt32: (UInt32, UInt64)] = [:]
+    private var videoSR: [UInt32: (UInt32, UInt64)] = [:] // at most the resolved stripe group
+    private var audioSR: (UInt32, UInt64)?
     private var audioRemote: (ssrc: UInt32, seq: UInt16)?
     private var rctl = RctlState()
     private var lastFIR: [Int: UInt64] = [:]
@@ -96,8 +100,9 @@ final class MediaTransport: @unchecked Sendable {
     static let maxPendingPackets = 8192
     static let firMinIntervalNanos: UInt64 = 500_000_000
 
-    init(pipeline: MediaPipeline, evidence: EvidenceLog, tiles: Int) {
+    init(pipeline: MediaPipeline, evidence: EvidenceLog, tiles: Int, audio: AudioPipeline? = nil) {
         self.pipeline = pipeline
+        self.audio = audio
         self.queue = pipeline.queue
         self.evidence = evidence
         self.tiles = tiles
@@ -115,7 +120,7 @@ final class MediaTransport: @unchecked Sendable {
             self?.ingestVideo($0)
         }
         audioConnection = connect(host: host, remotePort: audio, localPort: localAudio) { [weak self] in
-            self?.handleAudioDatagram($0)
+            self?.ingestAudio($0)
         }
         pipeline.onRecoveryNeeded = { [weak self] stripe in self?.requestRecovery(stripe: stripe) }
     }
@@ -134,7 +139,7 @@ final class MediaTransport: @unchecked Sendable {
     /// pipeline's assembly/decoder state) carries over.
     func configure(keys: MediaKeys, videoSSRC: UInt32, audioSSRC: UInt32, offerID: UInt64 = 0) throws {
         dispatchPrecondition(condition: .onQueue(queue))
-        guard !stopped else { return }
+        guard !stopped, configuredOffer.map({ offerID > $0 }) ?? true else { return }
         suspend()
         let inboundVideo = try SRTPSession(keySalt: keys.videoFromHost, inbound: true)
         let inboundAudio = try SRTPSession(keySalt: keys.audioFromHost, inbound: true)
@@ -142,12 +147,9 @@ final class MediaTransport: @unchecked Sendable {
         let outboundAudio = try SRTPSession(keySalt: keys.audioToHost, inbound: false)
         configuredOffer = offerID
         self.offerID = offerID
-        stripeOf = nil
-        canvasReady = false
-        pending = []
-        seenSSRCs = [:]
         extendedSeq = [:]
-        hostSR = [:]
+        videoSR = [:]
+        audioSR = nil
         audioRemote = nil
         rctl = RctlState()
         lastFIR = [:]
@@ -161,6 +163,7 @@ final class MediaTransport: @unchecked Sendable {
         videoOut = outboundVideo; audioOut = outboundAudio
         ourVideoSSRC = videoSSRC
         ourAudioSSRC = audioSSRC
+        audio?.mediaGenerationChanged(offerID)
     }
 
     /// Applies this offer's video answer before `canvasKnown` releases buffered packets.
@@ -187,6 +190,7 @@ final class MediaTransport: @unchecked Sendable {
 
     func canvasKnown(width: Int, height: Int, geometry: DesktopGeometry? = nil, offerID: UInt64 = 0) {
         dispatchPrecondition(condition: .onQueue(queue))
+        guard !stopped, videoIn != nil, configuredOffer == offerID else { return }
         self.offerID = offerID
         pipeline.configureStream(canvas: (width, height), stripeCount: tiles, ssrcToStripe: stripeOf ?? [:],
                                  geometry: geometry, offerID: offerID)
@@ -219,20 +223,21 @@ final class MediaTransport: @unchecked Sendable {
     /// supplies fresh SRTP contexts. The renderer retains its last valid image.
     func suspend() {
         dispatchPrecondition(condition: .onQueue(queue))
+        if let configuredOffer { audio?.mediaSuspended(offer: configuredOffer) }
         for t in timers { t.cancel() }
         timers = []
         pipeline.stopPolling()
         pipeline.resetStream()
         pipeline.setReferenceAcknowledgments(active: false)
-        configuredOffer = nil
         videoIn = nil; audioIn = nil; videoOut = nil; audioOut = nil
         pending = []; stripeOf = nil; seenSSRCs = [:]; canvasReady = false
     }
 
     func stop() {
         dispatchPrecondition(condition: .onQueue(queue))
+        guard !stopped else { return }
         stopped = true
-        configuredOffer = nil
+        if let configuredOffer { audio?.mediaStopped(offer: configuredOffer) }
         for t in timers { t.cancel() }
         timers = []
         pipeline.stopPolling()
@@ -396,6 +401,9 @@ final class MediaTransport: @unchecked Sendable {
         guard let best else { return }
         let map = Dictionary(uniqueKeysWithValues: (0..<tiles).map { (best.base &+ UInt32($0), $0) })
         stripeOf = map
+        // All stripes of an update share its RTP timestamp. Native video
+        // sender reports come from stripe zero, the same source as RCTL's clock.
+        audio?.avClock.selectSource(.video, ssrc: best.base, offer: offerID)
         evidence.set("media.ssrcGroup.offer\(offerID)", map.sorted { $0.value < $1.value }.map { String(format: "0x%08x", $0.key) }.joined(separator: ","))
         evidence.set("media.ssrcGroup", map.sorted { $0.value < $1.value }.map { String(format: "0x%08x", $0.key) }.joined(separator: ","))
         if canvasReady { pipeline.updateStripeMap(map) }
@@ -419,33 +427,50 @@ final class MediaTransport: @unchecked Sendable {
         }
     }
 
-    private func handleAudioDatagram(_ datagram: Data) {
-        let now = DispatchTime.now().uptimeNanoseconds
+    /// Audio leg (5900): the host's RTCP and its PT-101 audio. Only packets that
+    /// pass SRTP authentication and the replay window reach the audio pipeline.
+    func ingestAudio(_ datagram: Data, now: UInt64 = DispatchTime.now().uptimeNanoseconds) {
+        dispatchPrecondition(condition: .onQueue(queue))
         #if (DEBUG && VICINIA_DEVELOPER_TOOLS) || VICINIA_MEASUREMENT_TOOLS
         if dropped(now) { return }
         #endif
         counters.audioDatagrams += 1
-        if Self.isRTCP(datagram) { handleRTCP(datagram, session: audioIn, now: now); return }
+        if Self.isRTCP(datagram) { handleRTCP(datagram, session: audioIn, now: now, leg: .audio); return }
         guard let audioIn else { return }
-        // Audio playback is disabled: authenticate (including replay check) and discard.
-        do {
-            let plain = try audioIn.unprotectRTP(datagram)
-            noteMedia(now)
-            if let rtp = try? RTPPacket(plain) { audioRemote = (rtp.ssrc, rtp.sequence) }
-            counters.audioDiscarded += 1
-        } catch SRTPError.authentication { counters.srtpAuthFailures += 1 } catch SRTPError.replay {
-            counters.srtpReplays += 1
-        } catch { counters.srtpOtherErrors += 1 }
+        let plain: Data
+        do { plain = try audioIn.unprotectRTP(datagram) } catch SRTPError.authentication {
+            counters.srtpAuthFailures += 1; return
+        } catch SRTPError.replay { counters.srtpReplays += 1; return } catch { counters.srtpOtherErrors += 1; return }
+        noteMedia(now)
+        guard let rtp = try? RTPPacket(plain) else { counters.srtpOtherErrors += 1; return }
+        guard rtp.payloadType == HPSSAudio.payloadType else { counters.nonAACAudio += 1; return }
+        guard (1...HPSSAudio.maxAccessUnitBytes).contains(rtp.payload.count) else { counters.audioDiscarded += 1; return }
+        noteSequence(ssrc: rtp.ssrc, seq: rtp.sequence)
+        if audioRemote?.ssrc != rtp.ssrc {
+            audioSR = nil
+            audio?.avClock.selectSource(.audio, ssrc: rtp.ssrc, offer: offerID)
+        }
+        audioRemote = (rtp.ssrc, rtp.sequence)
+        let packet = AudioPacket(sequence: rtp.sequence, timestamp: rtp.timestamp, ssrc: rtp.ssrc,
+                                 payload: rtp.payload, arrival: now, mediaGeneration: offerID)
+        if audio?.accept(packet) == true { counters.audioForwarded += 1 } else { counters.audioDiscarded += 1 }
     }
 
-    private func handleRTCP(_ datagram: Data, session: SRTPSession?, now: UInt64) {
+    private func handleRTCP(_ datagram: Data, session: SRTPSession?, now: UInt64, leg: AVClockCorrelator.Leg = .video) {
         guard let session else { return }
         guard let plain = try? session.unprotectRTCP(datagram) else { counters.srtcpFailures += 1; return }
         noteMedia(now)
         counters.rtcpIn += 1
-        for (ssrc, mid) in RTCPBuild.senderReports(plain) {
-            hostSR[ssrc] = (mid, now)
-            counters.hostSenderReports += 1
+        let reports = RTCPBuild.senderReportClocks(plain)
+        counters.hostSenderReports += reports.count
+        for report in reports {
+            switch leg {
+            case .audio:
+                if report.ssrc == audioRemote?.ssrc { audioSR = (report.middleNTP, now) }
+            case .video:
+                if stripeOf?[report.ssrc] != nil { videoSR[report.ssrc] = (report.middleNTP, now) }
+            }
+            audio?.avClock.senderReport(report, leg: leg, offer: offerID, received: now)
         }
     }
 
@@ -503,7 +528,7 @@ final class MediaTransport: @unchecked Sendable {
         if let videoOut {
             let sources = (stripeOf ?? [:]).keys.sorted().map { ssrc -> (UInt32, UInt32, UInt32, UInt32) in
                 let e = extendedSeq[ssrc] ?? (0, 0)
-                let (lsr, dlsr) = Self.lsrDLSR(hostSR[ssrc], now: now)
+                let (lsr, dlsr) = Self.lsrDLSR(videoSR[ssrc], now: now)
                 return (ssrc, (e.roc & 0xFFFF) << 16 | UInt32(e.seq), lsr, dlsr)
             }
             var pkt = RTCPBuild.rr(sender: ourVideoSSRC, sources: sources.map { ($0.0, $0.1, $0.2, $0.3) })
@@ -514,8 +539,9 @@ final class MediaTransport: @unchecked Sendable {
         if ticks % 2 == 0, let audioOut {
             var sources: [(UInt32, UInt32, UInt32, UInt32)] = []
             if let a = audioRemote {
-                let (lsr, dlsr) = Self.lsrDLSR(hostSR[a.ssrc], now: now)
-                sources.append((a.ssrc, UInt32(a.seq), lsr, dlsr))
+                let (lsr, dlsr) = Self.lsrDLSR(audioSR, now: now)
+                let e = extendedSeq[a.ssrc] ?? (a.seq, 0)
+                sources.append((a.ssrc, (e.roc & 0xFFFF) << 16 | UInt32(e.seq), lsr, dlsr))
             }
             if let p = try? audioOut.protectRTCP(RTCPBuild.rr(sender: ourAudioSSRC, sources: sources.map { ($0.0, $0.1, $0.2, $0.3) })) {
                 send(p, on: audioConnection)
@@ -527,8 +553,10 @@ final class MediaTransport: @unchecked Sendable {
     }
 
     private static func lsrDLSR(_ sr: (UInt32, UInt64)?, now: UInt64) -> (UInt32, UInt32) {
-        guard let (mid, arrival) = sr else { return (0, 0) }
-        return (mid, UInt32(truncatingIfNeeded: (now &- arrival) * 65536 / 1_000_000_000))
+        guard let (mid, arrival) = sr, now >= arrival else { return (0, 0) }
+        let elapsed = now - arrival
+        let delay = (elapsed / 1_000_000_000) * 65536 + (elapsed % 1_000_000_000) * 65536 / 1_000_000_000
+        return (mid, UInt32(truncatingIfNeeded: delay))
     }
 
     /// Irreversible compressed loss or decode failure on `stripe`: ask for a
@@ -564,7 +592,8 @@ final class MediaTransport: @unchecked Sendable {
             "transport.rtcpIn": "\(c.rtcpIn)", "transport.hostSenderReports": "\(c.hostSenderReports)",
             "transport.srtpAuthFailures": "\(c.srtpAuthFailures)", "transport.srtpReplays": "\(c.srtpReplays)",
             "transport.srtpOtherErrors": "\(c.srtpOtherErrors)", "transport.srtcpFailures": "\(c.srtcpFailures)",
-            "transport.audioDiscarded": "\(c.audioDiscarded)", "transport.nonHEVCVideo": "\(c.nonHEVCVideo)",
+            "transport.audioDiscarded": "\(c.audioDiscarded)", "transport.audioForwarded": "\(c.audioForwarded)",
+            "transport.nonAACAudio": "\(c.nonAACAudio)", "transport.nonHEVCVideo": "\(c.nonHEVCVideo)",
             "transport.bufferedBeforeResolution": "\(c.bufferedBeforeResolution)",
             "transport.bufferOverflow": "\(c.bufferOverflow)",
             "feedback.rctlSent": "\(c.rctlSent)", "feedback.rrSent": "\(c.rrSent)",

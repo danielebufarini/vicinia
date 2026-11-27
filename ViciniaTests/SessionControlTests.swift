@@ -7,6 +7,7 @@
 // Verifies that the dispatched-input ledger tracks only events actually
 // dispatched on the wire, not events merely queued.
 
+import AVFAudio
 import Foundation
 import Synchronization
 import Testing
@@ -243,13 +244,17 @@ struct SessionControlTests {
         let gate: SendGate
         let host: FakeHost
         let base: Int
+        let audioSession: FakeAudioSession
     }
 
     /// The real controller owns authentication, epoch callbacks and presentation.
     /// A metadata-only snapshot supplies coordinates, not physical decode evidence.
     /// `presentingFirstDesktop: false` runs `body` while the first desktop is still awaited.
     /// `toolbar` defaults to an isolated one (own defaults domain, timers that never fire).
+    /// Audio runs through the production pipeline with an offline output and a fake session.
     @MainActor private func withController(presentingFirstDesktop: Bool = true, toolbar: SessionToolbar? = nil,
+                                           profile: ProfileBinding? = nil,
+                                           decodeAccessUnit: (@Sendable (AACELDDecoder, Data) throws -> AVAudioPCMBuffer)? = nil,
                                            _ body: @MainActor (ControllerRig) async throws -> Void) async throws {
         try? HostKeyPinStore.forget(host: Self.pinHost)
         let host = try FakeHost(behavior: .valid)
@@ -260,8 +265,12 @@ struct SessionControlTests {
         let channel = ControlChannel(host: Self.pinHost, port: port)
         await channel.gateSends { await gate.pass() }
         let toolbarDefaults = TestDefaults()
+        let audioSession = FakeAudioSession()
+        let decode = decodeAccessUnit ?? { try $0.decode($1) }
         let controller = SessionController(channel: channel, evidence: EvidenceLog(), toolbar: toolbar ?? SessionToolbar(
-            defaults: toolbarDefaults.defaults, assistiveTechnologyRunning: { false }, schedule: ManualSchedule().schedule))
+            defaults: toolbarDefaults.defaults, assistiveTechnologyRunning: { false }, schedule: ManualSchedule().schedule),
+            makeAudio: { AudioPipeline(enabled: $0, session: audioSession, output: .offline, decodeAccessUnit: decode) },
+            slot: LiveSessionSlot())  // parallel suites: not the app's single-session owner
         let view = DesktopView(frame: .zero)
         var connected: HPSSSession?
 
@@ -293,7 +302,7 @@ struct SessionControlTests {
                                               interfaceOrientation: "landscapeRight", maximumFramesPerSecond: 60))
             controller.start(SessionSource(id: "controller-test", clipURL: nil,
                                            live: LiveRequest(host: Self.pinHost, username: "tester",
-                                                             password: SecretBytes("correct horse"))), window: nil)
+                                                             password: SecretBytes("correct horse"), profile: profile)), window: nil)
             try #require(await eventually(.seconds(2)) { await controller.trustPrompt != nil })
             #expect(controller.connectionProgress == "Authenticating with the Mac…")
             #expect(controller.terminalTitle == nil)
@@ -321,7 +330,7 @@ struct SessionControlTests {
             }
             let base = await peer.received.count
             try await body(ControllerRig(controller: controller, view: view, session: session,
-                                         peer: peer, gate: gate, host: host, base: base))
+                                         peer: peer, gate: gate, host: host, base: base, audioSession: audioSession))
         } catch {
             await finish()
             throw error
@@ -1190,5 +1199,265 @@ struct SessionControlTests {
         #expect(await eventually { await rig.peer.closed })
         rig.host.stop()
         try? HostKeyPinStore.forget(host: Self.pinHost)
+    }
+
+    // MARK: Mac audio and the session lifetime
+
+    private static let audioPacket = AudioPacket(sequence: 1, timestamp: 0, ssrc: 1, payload: Data([0, 0, 0, 0]),
+                                                 arrival: 0, mediaGeneration: 1)
+
+    /// Field 4 of the audio description in a client offer, read from the decrypted record.
+    private func audioBitRate(in offer: [UInt8]) throws -> UInt64? {
+        let audioLength = Int(offer[10]) << 8 | Int(offer[11])
+        let plist = Data(offer[0x80 ..< 0x80 + audioLength])
+        guard let dict = try PropertyListSerialization.propertyList(from: plist, format: nil) as? [String: Any],
+              let blob = dict["avcMediaStreamNegotiatorMediaBlob"] as? Data else { return nil }
+        var top = ProtoIterator(try zlibDecompress([UInt8](blob), limit: 1 << 16))
+        while let (field, wire, _, bytes) = top.next() {
+            guard field == 3, wire == 2, let bytes else { continue }
+            var description = ProtoIterator(bytes)
+            while let (f, w, value, _) = description.next() { if f == 4, w == 0 { return value } }
+        }
+        return nil
+    }
+
+    @MainActor @Test func liveSessionRequestsMacAudioAndAuthorizesItAtTheFirstDesktop() async throws {
+        try await withController { rig in
+            let offer = try #require(await rig.peer.received.last { $0.first == 0x1C })
+            #expect(try audioBitRate(in: offer) == 24_191)
+            let lifetime = try #require(rig.controller.lifetime), audio = try #require(rig.controller.audio)
+            #expect(lifetime.established && lifetime.authorization != nil)
+            #expect(await eventually(.seconds(2)) { audio.snapshot.running && audio.snapshot.accepting })
+            #expect(rig.audioSession.activations.load(ordering: .relaxed) == 1)
+            // The fake peer sends no audio RTP: the state says waiting, never playing.
+            #expect(await eventually(.seconds(2)) { await rig.controller.audioState == .negotiating })
+        }
+    }
+
+    /// Close ends the lifetime and closes audio synchronously, before the
+    /// trusted release of a held key is even submitted; the release then
+    /// completes exactly as before.
+    @MainActor @Test func closeRevokesAudioBeforeTheTrustedReleaseAndTeardown() async throws {
+        try await withController { rig in
+            let audio = try #require(rig.controller.audio)
+            try #require(await eventually(.seconds(2)) { audio.snapshot.accepting })
+            rig.view.onInput?(.key(0x61, true))
+            try #require(await eventually(.seconds(2)) { await rig.peer.keyEvents(from: rig.base) == [.init(key: 0x61, down: true)] })
+            rig.gate.close()
+            rig.controller.stop()
+            #expect(rig.controller.lifetime?.ended == true && rig.controller.lifetime?.authorization == nil)
+            #expect(rig.controller.lifetime?.lastRevocation == .voluntaryClose)
+            #expect(!audio.accept(Self.audioPacket))
+            try #require(await eventually(.seconds(2)) { rig.gate.waiting > 0 })    // the release is parked at the writer
+            #expect(await rig.peer.keyEvents(from: rig.base) == [.init(key: 0x61, down: true)])
+            rig.gate.open()
+            #expect(await eventually(.seconds(2)) {
+                await rig.peer.keyEvents(from: rig.base) == [.init(key: 0x61, down: true), .init(key: 0x61, down: false)]
+            })
+            audio.sync()
+            #expect(!audio.snapshot.running && rig.audioSession.deactivations.load(ordering: .relaxed) == 1)
+        }
+    }
+
+    /// Transient inactivity changes nothing; true background and lock revoke
+    /// audio while the session continues (its background policy is unchanged);
+    /// a return to active authorizes the same, still valid session again.
+    @MainActor @Test func trueBackgroundRevokesAudioAndReturnReauthorizesTheSameSession() async throws {
+        try await withController { rig in
+            let c = rig.controller, audio = try #require(c.audio), lifetime = try #require(c.lifetime)
+            try #require(await eventually(.seconds(2)) { audio.snapshot.accepting })
+            let first = try #require(lifetime.authorization)
+            for signal: SceneSignal in [.willDeactivate, .didActivate, .willDeactivate, .didActivate] { c.sceneSignal(signal) }
+            #expect(lifetime.authorization == first && audio.snapshot.accepting)
+            c.sceneSignal(.willDeactivate)
+            c.sceneSignal(.didEnterBackground)
+            #expect(lifetime.authorization == nil && lifetime.lastRevocation == .background && !audio.accept(Self.audioPacket))
+            audio.sync()
+            #expect(!audio.snapshot.running && c.phase == .streaming)
+            c.sceneSignal(.willEnterForeground)
+            #expect(lifetime.authorization == nil)
+            c.sceneSignal(.didActivate)
+            let second = try #require(lifetime.authorization)
+            #expect(second.operation > first.operation && second.session == first.session)
+            #expect(await eventually(.seconds(2)) { audio.snapshot.running && audio.snapshot.accepting })
+            // Device lock in the order iOS 27.2.1 reports it, with the scene active for a moment.
+            for signal: SceneSignal in [.protectedDataWillBecomeUnavailable, .willDeactivate, .didActivate, .willDeactivate, .didEnterBackground] {
+                c.sceneSignal(signal)
+            }
+            #expect(lifetime.lastRevocation == .deviceLock && lifetime.authorization == nil)
+            audio.sync()
+            #expect(!audio.snapshot.running)
+            #expect(rig.audioSession.activations.load(ordering: .relaxed) == 2)
+            #expect(rig.audioSession.deactivations.load(ordering: .relaxed) == 2)
+        }
+    }
+
+    @MainActor @Test func audioMenuWaitsUntilTheSessionCanApplyItsActions() throws {
+        let controller = SessionController()
+        #expect(controller.audioState == nil)
+        let items = try #require(AudioMenuControl(controller: controller).menu?.children as? [UIAction])
+        #expect(items.count == 2 && items.allSatisfy { $0.attributes.contains(.disabled) })
+    }
+
+    @MainActor @Test(.appLifecycleExclusive) func sceneObservationFollowsTheDesktopWindowAndSeedsTheDeviceLock() throws {
+        let c = SessionController(protectedDataAvailable: { false })
+        let view = DesktopView(frame: .zero)
+        c.attach(view)
+        defer { c.stop() }
+        c.start(SessionSource(id: "scene-binding", clipURL: nil), window: nil)
+        #expect(view.window == nil && c.sceneState.activity == .locked)
+        let scene = try #require(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        window.addSubview(view)
+        let center = NotificationCenter.default
+        center.post(name: UIScene.didActivateNotification, object: scene)
+        #expect(c.sceneState.activity == .locked)
+        center.post(name: UIApplication.protectedDataDidBecomeAvailableNotification, object: nil)
+        #expect(c.sceneState.activity == .active)
+        center.post(name: UIApplication.didEnterBackgroundNotification, object: nil)
+        #expect(c.sceneState.activity == .active)   // the temporary fallback has been removed
+        center.post(name: UIScene.didEnterBackgroundNotification, object: scene)
+        #expect(c.sceneState.activity == .background)
+        view.removeFromSuperview()
+        center.post(name: UIScene.didActivateNotification, object: scene)
+        #expect(c.sceneState.activity == .background)
+        window.addSubview(view)
+        center.post(name: UIApplication.protectedDataDidBecomeAvailableNotification, object: nil)
+        center.post(name: UIScene.didActivateNotification, object: scene)
+        #expect(c.sceneState.activity == .active)
+        view.removeFromSuperview()
+    }
+
+    /// Mute and Play change this session; Play is saved for this Mac only.
+    @MainActor @Test func audioControlsAreTruthfulAndSaveOnlyThisMacsPreference() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: "vicinia-profiles-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = ProfileStore(directory: directory, legacyDefaults: nil)
+        let other = store.binding(host: "other.invalid", username: "tester")
+        other.save(ProfilePreferences(audio: AudioPreference(enabled: true)))
+        let binding = store.binding(host: Self.pinHost, username: "tester")
+        try await withController(profile: binding) { rig in
+            let c = rig.controller
+            #expect(store.profile(binding.profileID)?.lastSuccessfulConnection != nil)   // saved at the first desktop
+            try #require(await eventually(.seconds(2)) { await c.audioState == .negotiating })
+            c.setAudioMuted(true)
+            try #require(await eventually(.seconds(2)) { await c.audioState == .muted })
+            c.setAudioMuted(false)
+            c.setAudioEnabled(false)
+            try #require(await eventually(.seconds(2)) { await c.audioState == .disabled })
+            #expect(store.profile(binding.profileID)?.preferences.audio == AudioPreference(enabled: false))
+            #expect(store.profile(other.profileID)?.preferences.audio == AudioPreference(enabled: true))
+            #expect(c.preferences.audio?.enabled == false && binding.preferences.audio == nil)
+            let control = AudioMenuControl(controller: c)
+            #expect(control.accessibilityLabel == "Mac audio" && control.accessibilityValue == "Off")
+            #expect(control.menu?.title == "Mac Audio: Off")
+            let items = try #require(control.menu?.children as? [UIAction])
+            #expect(items.map(\.title) == ["Play Mac Audio", "Mute"])
+            #expect(items[0].state == .off && items[1].attributes.contains(.disabled))
+            c.setAudioEnabled(true)
+            try #require(await eventually(.seconds(2)) { await c.audioState == .negotiating })
+            control.refresh()
+            #expect(control.accessibilityValue == "Waiting for audio from the Mac")
+            await store.flush()
+        }
+        #expect(store.binding(host: Self.pinHost, username: "tester").preferences.audio?.enabled == true)
+    }
+
+    /// Integration of HPSSSession.disconnect() and AudioPipeline.stopAndDrain()
+    /// actor-state regression: teardown stops queued PCM immediately while decode is
+    /// parked, keeps the session in `.disconnecting` (never `.idle`) and suspends
+    /// concurrent `disconnect()` callers until `stopAndDrain()` completes.
+    @MainActor @Test func disconnectWaitsForAudioStopAndDrainBeforeEnteringIdle() async throws {
+        let entered = Atomic(false), release = DispatchSemaphore(value: 0)
+        let park = Atomic(false), expired = Atomic(false)
+        defer { release.signal() }
+        try await withController(decodeAccessUnit: { decoder, unit in
+            let block = try decoder.decode(unit)
+            if park.exchange(false, ordering: .acquiringAndReleasing) {
+                entered.store(true, ordering: .releasing)
+                if release.wait(timeout: .now() + .seconds(5)) != .success {
+                    expired.store(true, ordering: .releasing)
+                }
+            }
+            return block
+        }) { rig in
+            let audio = try #require(rig.controller.audio)
+            try #require(await eventually(.seconds(2)) { audio.snapshot.running && audio.snapshot.accepting })
+            for i in 0..<4 {
+                let pkt = AudioPacket(sequence: UInt16(i + 1), timestamp: UInt32(i * 480), ssrc: 7,
+                                      payload: Data(AudioFixture.accessUnits[i]),
+                                      arrival: UInt64(i) * 10_000_000, mediaGeneration: 1)
+                #expect(audio.accept(pkt))
+                audio.sync()
+            }
+            #expect(audio.snapshot.playing && audio.snapshot.counters.scheduled == 4)
+            let engine = try #require(audio.offlineEngine)
+            let format = try #require(HPSSAudio.pcmFormat())
+            let buffer = try #require(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 4096))
+
+            park.store(true, ordering: .releasing)
+            let parkedPkt = AudioPacket(sequence: 5, timestamp: 4 * 480, ssrc: 7,
+                                        payload: Data(AudioFixture.accessUnits[4]),
+                                        arrival: 40_000_000, mediaGeneration: 1)
+            #expect(audio.accept(parkedPkt))
+            try #require(await eventually(.seconds(3)) { entered.load(ordering: .acquiring) })
+
+            let done1 = Atomic(false), done2 = Atomic(false)
+            let first = Task {
+                await rig.session.disconnect()
+                done1.store(true, ordering: .releasing)
+            }
+            try #require(await eventually(.seconds(2)) { await rig.controller.phase == .disconnecting })
+            try #require(await eventually(.seconds(2)) { await rig.peer.closed })
+            let second = Task {
+                await rig.session.disconnect()
+                done2.store(true, ordering: .releasing)
+            }
+            // Revocation closed admission and unscheduled queued PCM immediately, while
+            // HPSSSession stays in `.disconnecting` until the audio worker drains.
+            #expect(!audio.accept(Self.audioPacket))
+            #expect(engine.manualRenderingSampleTime == 0)
+            #expect(try engine.renderOffline(4096, to: buffer) == .success && buffer.frameLength == 4096)
+            let planes = try #require(buffer.floatChannelData)
+            let nonSilent = (0..<Int(buffer.frameLength)).count { abs(planes[0][$0]) > 0.001 || abs(planes[1][$0]) > 0.001 }
+            #expect(nonSilent == 0)
+
+            try await Task.sleep(for: .milliseconds(100))
+            let early1 = done1.load(ordering: .acquiring), early2 = done2.load(ordering: .acquiring)
+            let timedOut = expired.load(ordering: .acquiring)
+            #expect(!early1 && !early2 && !timedOut)
+            #expect(rig.controller.phase == .disconnecting)
+            #expect(rig.controller.evidence?.value("session.teardown") == nil)
+
+            release.signal()
+            await first.value
+            await second.value
+            let finished1 = done1.load(ordering: .acquiring), finished2 = done2.load(ordering: .acquiring)
+            #expect(finished1 && finished2)
+            try #require(await eventually(.seconds(2)) { await rig.controller.phase == .idle })
+            #expect(rig.controller.evidence?.value("session.teardown") != nil)
+            #expect(!audio.snapshot.running && !audio.snapshot.playing && audio.snapshot.counters.scheduled == 4)
+            #expect(audio.ingressReservations == (0, 0))
+            #expect(rig.audioSession.deactivations.load(ordering: .relaxed) == 1)
+        }
+    }
+
+    /// A replacement session gets a new generation and its own audio; the old
+    /// pipeline is final and cannot be revived by a late grant.
+    @MainActor @Test func aReplacementSessionHasItsOwnGenerationAndAudio() async throws {
+        var previous: (generation: UInt64, audio: AudioPipeline)?
+        try await withController { rig in
+            previous = (try #require(rig.controller.lifetime).token.generation, try #require(rig.controller.audio))
+        }
+        let old = try #require(previous)
+        old.audio.sync()
+        #expect(!old.audio.snapshot.running && !old.audio.accept(Self.audioPacket))
+        try await withController { rig in
+            let lifetime = try #require(rig.controller.lifetime), audio = try #require(rig.controller.audio)
+            #expect(lifetime.token.generation > old.generation && audio !== old.audio)
+            old.audio.authorize(try #require(lifetime.authorization))
+            old.audio.sync()
+            #expect(!old.audio.snapshot.running && !old.audio.accept(Self.audioPacket))
+        }
     }
 }

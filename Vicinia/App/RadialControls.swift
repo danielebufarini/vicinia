@@ -6,30 +6,31 @@ import SwiftUI
 import UIKit
 
 /// Pure radial geometry and safe-area clamping for the floating session controls.
+/// Adapts between a four-command cardinal layout (`Options`, `Audio`, `Keyboard`, `Close`)
+/// for audio-capable live sessions and a three-command layout (`Options`, `Keyboard`, `Close`)
+/// for sessions without live audio capability.
 struct RadialMenuLayout: Equatable, Sendable {
     enum Command: CaseIterable, Equatable, Sendable {
-        case display
-        case fit
+        case options
+        case audio
+        case keyboard
         case close
-
-        /// Polar angle in screen coordinates (0 = right, -π/2 = top, +π/2 = bottom).
-        var angle: CGFloat {
-            switch self {
-            case .display: -.pi / 2          // 12 o'clock
-            case .fit: 5 * .pi / 6           // 8 o'clock
-            case .close: .pi / 6             // 4 o'clock
-            }
-        }
     }
 
     static let preferredDiameter: CGFloat = 204
+    static let preferredFourCommandDiameter: CGFloat = 210
     static let accessibilityDiameter: CGFloat = 216
+    static let accessibilityFourCommandDiameter: CGFloat = 220
     static let minimumPreferredDiameter: CGFloat = 180
     static let maximumPreferredDiameter: CGFloat = 220
     static let minimumCompactDiameter: CGFloat = 148
+    static let minimumFourCommandCompactDiameter: CGFloat = 156
     static let minimumTargetSize: CGFloat = 44
     static let edgeMargin: CGFloat = 12
+    static let minimumHubClearance: CGFloat = 4
+    static let minimumAdjacentClearance: CGFloat = 8
 
+    let commands: [Command]
     let safeRect: CGRect
     let diameter: CGFloat
     let hubDiameter: CGFloat
@@ -49,27 +50,37 @@ struct RadialMenuLayout: Equatable, Sendable {
                width: hubDiameter, height: hubDiameter)
     }
 
-    init(containerSize: CGSize, safeAreaInsets: EdgeInsets, anchor: CGPoint?, isAccessibilityTextSize: Bool = false) {
+    init(containerSize: CGSize, safeAreaInsets: EdgeInsets, anchor: CGPoint?,
+         includesAudio: Bool = false, isAccessibilityTextSize: Bool = false) {
         let minX = safeAreaInsets.leading
         let maxX = max(minX, containerSize.width - safeAreaInsets.trailing)
         let minY = safeAreaInsets.top
         let maxY = max(minY, containerSize.height - safeAreaInsets.bottom)
         let safeRect = CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
-        self.init(safeRect: safeRect, anchor: anchor, isAccessibilityTextSize: isAccessibilityTextSize)
+        self.init(safeRect: safeRect, anchor: anchor, includesAudio: includesAudio, isAccessibilityTextSize: isAccessibilityTextSize)
     }
 
-    init(safeRect: CGRect, anchor: CGPoint?, isAccessibilityTextSize: Bool = false) {
+    init(safeRect: CGRect, anchor: CGPoint?, includesAudio: Bool = false, isAccessibilityTextSize: Bool = false) {
+        let commands: [Command] = includesAudio ? [.options, .audio, .keyboard, .close] : [.options, .keyboard, .close]
+        self.commands = commands
         self.safeRect = safeRect
-        let desired = isAccessibilityTextSize ? Self.accessibilityDiameter : Self.preferredDiameter
+
+        let isFour = commands.count == 4
+        let desired = isFour
+            ? (isAccessibilityTextSize ? Self.accessibilityFourCommandDiameter : Self.preferredFourCommandDiameter)
+            : (isAccessibilityTextSize ? Self.accessibilityDiameter : Self.preferredDiameter)
+        let minCompact = isFour ? Self.minimumFourCommandCompactDiameter : Self.minimumCompactDiameter
+        let hubRatio: CGFloat = isFour ? 0.22 : 0.235
+        let itemRatio: CGFloat = isFour ? 0.295 : 0.315
 
         let insetRect: CGRect
         let resolvedDiameter: CGFloat
         if safeRect.width > 0, safeRect.height > 0 {
-            let insetX = min(Self.edgeMargin, max(0, (safeRect.width - Self.minimumCompactDiameter) / 2))
-            let insetY = min(Self.edgeMargin, max(0, (safeRect.height - Self.minimumCompactDiameter) / 2))
+            let insetX = min(Self.edgeMargin, max(0, (safeRect.width - minCompact) / 2))
+            let insetY = min(Self.edgeMargin, max(0, (safeRect.height - minCompact) / 2))
             insetRect = safeRect.insetBy(dx: insetX, dy: insetY)
             let availableMin = min(insetRect.width, insetRect.height)
-            resolvedDiameter = max(Self.minimumCompactDiameter, min(desired, availableMin))
+            resolvedDiameter = max(minCompact, min(desired, availableMin))
         } else {
             insetRect = safeRect
             resolvedDiameter = desired
@@ -77,10 +88,13 @@ struct RadialMenuLayout: Equatable, Sendable {
 
         let radius = resolvedDiameter / 2
         let ringPadding = max(4, (resolvedDiameter * 0.04).rounded())
-        let hubDiameter = max(Self.minimumTargetSize, (resolvedDiameter * 0.235).rounded())
-        let maxItemForClearance = (radius - ringPadding - hubDiameter / 2 - 4).rounded(.down)
-        let itemDiameter = max(Self.minimumTargetSize, min((resolvedDiameter * 0.315).rounded(), maxItemForClearance))
-        let orbitRadius = max(radius - ringPadding - itemDiameter / 2, (hubDiameter + itemDiameter) / 2 + 4)
+        let hubDiameter = max(Self.minimumTargetSize, (resolvedDiameter * hubRatio).rounded())
+        let maxItemForHubClearance = (radius - ringPadding - hubDiameter / 2 - Self.minimumHubClearance).rounded(.down)
+        let sinHalfStep = sin(.pi / CGFloat(commands.count))
+        let maxItemForAngularClearance = ((2 * sinHalfStep * (radius - ringPadding) - Self.minimumAdjacentClearance) / (1 + sinHalfStep)).rounded(.down)
+        let maxItemForClearance = min(maxItemForHubClearance, maxItemForAngularClearance)
+        let itemDiameter = max(Self.minimumTargetSize, min((resolvedDiameter * itemRatio).rounded(), maxItemForClearance))
+        let orbitRadius = max(radius - ringPadding - itemDiameter / 2, (hubDiameter + itemDiameter) / 2 + Self.minimumHubClearance)
 
         let target = anchor ?? CGPoint(x: insetRect.maxX - radius, y: insetRect.minY + radius)
         let minCenterX = insetRect.minX + radius
@@ -97,8 +111,28 @@ struct RadialMenuLayout: Equatable, Sendable {
         self.center = CGPoint(x: centerX, y: centerY)
     }
 
+    /// Polar angle in screen coordinates (0 = right, -π/2 = top, +π/2 = bottom).
+    func angle(for command: Command) -> CGFloat {
+        if commands.count == 4 {
+            switch command {
+            case .options: -.pi / 2          // 12 o'clock
+            case .audio: 0                   // 3 o'clock
+            case .close: .pi / 2             // 6 o'clock
+            case .keyboard: .pi              // 9 o'clock
+            }
+        } else {
+            switch command {
+            case .options: -.pi / 2          // 12 o'clock
+            case .audio: 0                   // unused in 3-command layout
+            case .keyboard: 5 * .pi / 6      // 8 o'clock
+            case .close: .pi / 6             // 4 o'clock
+            }
+        }
+    }
+
     func offset(for command: Command) -> CGSize {
-        CGSize(width: cos(command.angle) * orbitRadius, height: sin(command.angle) * orbitRadius)
+        let theta = angle(for: command)
+        return CGSize(width: cos(theta) * orbitRadius, height: sin(theta) * orbitRadius)
     }
 
     func center(for command: Command) -> CGPoint {
@@ -140,6 +174,8 @@ class SessionToolbarControl: UIButton {
     /// Supplied by the owning radial container so a two-finger gesture cannot
     /// inadvertently activate a single-finger command.
     var radialMultiTouchInProgress: (() -> Bool)?
+    /// SF Symbol name applied by `configureRadialAppearance`.
+    private(set) var radialSymbolName: String?
     private(set) var sawMultiTouch = false
     private var isPressing = false {
         didSet { if oldValue != isPressing { toolbar?.setControlPressed(isPressing, control: ObjectIdentifier(self)) } }
@@ -202,6 +238,7 @@ class SessionToolbarControl: UIButton {
             }
         }
         configuration = config
+        radialSymbolName = symbolName
         largeContentTitle = title
         largeContentImage = UIImage(systemName: symbolName)
     }
@@ -303,7 +340,7 @@ class SessionToolbarControl: UIButton {
     }
 }
 
-/// Radial command actions: Fit and Close.
+/// Radial command actions: Keyboard and Close.
 final class SessionActionButton: SessionToolbarControl {
     var action: () -> Void = {}
 
@@ -340,38 +377,48 @@ final class SessionDismissButton: SessionToolbarControl {
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
 }
 
-/// The session menu (display mode, local pan, input mode, keyboard): UIKit
-/// reports when the menu opens and closes, which SwiftUI's `Menu` does not.
+/// The session options menu (display mode, Fit, local pan, input mode and,
+/// for a live session, the clipboard commands):
+/// UIKit reports when the menu opens and closes, which SwiftUI's `Menu` does not.
 final class SessionMenuControl: SessionToolbarControl {
     private weak var controller: SessionController?
-    private var shown: (profile: DisplayProfile, pan: Bool, trackpad: Bool, keyboard: Bool)?
+    private var shown: (profile: DisplayProfile, pan: Bool, trackpad: Bool,
+                        clipboard: Bool, clipboardReady: Bool, clipboardAutomatic: Bool)?
 
     init(controller: SessionController) {
         self.controller = controller
         super.init(toolbar: controller.toolbar)
         showsMenuAsPrimaryAction = true
-        accessibilityHint = String(localized: "Opens display, input and keyboard options.")
-        accessibilityIdentifier = "radial.display"
-        configureRadialAppearance(title: controller.profile.rawValue, symbolName: "display", style: .command)
+        accessibilityLabel = String(localized: "Options")
+        accessibilityHint = String(localized: "Opens display, fit and input options.")
+        accessibilityIdentifier = "radial.options"
+        configureRadialAppearance(title: String(localized: "Options"), symbolName: "gearshape", style: .command)
         refresh()
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
 
-    /// Title and menu follow the controller (observed through `updateUIView`).
+    /// Menu follows the controller (observed through `updateUIView`).
     /// Unrelated view updates never replace a menu that may be open.
     func refresh() {
         guard let c = controller else { return }
-        let state = (profile: c.profile, pan: c.panEnabled, trackpad: c.trackpad, keyboard: c.keyboardShown)
+        let clipboard = c.clipboard
+        let state = (profile: c.profile, pan: c.panEnabled, trackpad: c.trackpad, clipboard: clipboard != nil,
+                     clipboardReady: clipboard?.isAuthorized == true, clipboardAutomatic: clipboard?.automaticSync == true)
         if let shown, shown == state { return }
         shown = state
-        if configuration?.title != c.profile.rawValue {
-            configuration?.title = c.profile.rawValue
-        }
-        accessibilityLabel = c.profile.rawValue
-        largeContentTitle = c.profile.rawValue
         let used: @MainActor () -> Void = { [weak c] in c?.toolbar.controlUsed() }
         let profiles = DisplayProfile.allCases.map { profile in
-            UIAction(title: profile.rawValue) { [weak c] _ in used(); c?.setProfile(profile) }
+            UIAction(title: profile.rawValue, state: c.profile == profile ? .on : .off) { [weak c] _ in
+                used()
+                c?.setProfile(profile)
+            }
+        }
+        let fit = UIAction(
+            title: String(localized: "Fit"),
+            image: UIImage(systemName: "arrow.up.left.and.arrow.down.right")
+        ) { [weak c] _ in
+            used()
+            c?.fit()
         }
         let pan = UIAction(title: String(localized: "Local pan (one finger)"), state: c.panEnabled ? .on : .off) { [weak c] _ in
             used(); c?.panEnabled.toggle()
@@ -382,10 +429,23 @@ final class SessionMenuControl: SessionToolbarControl {
             UIAction(title: String(localized: "Trackpad"), state: c.trackpad ? .on : .off) { [weak c] _ in used(); c?.trackpad = true },
             UIAction(title: String(localized: "Direct"), state: c.trackpad ? .off : .on) { [weak c] _ in used(); c?.trackpad = false },
         ])
-        let keyboard = UIAction(title: String(localized: "Keyboard"), state: c.keyboardShown ? .on : .off) { [weak c] _ in
-            used(); c?.keyboardShown.toggle()
+        var children: [UIMenuElement] = profiles + [fit, pan, input]
+        if state.clipboard {
+            // Live sessions only: direction is explicit for both manual commands.
+            let ready: UIMenuElement.Attributes = state.clipboardReady ? [] : .disabled
+            children.append(UIMenu(title: String(localized: "Clipboard"), image: UIImage(systemName: "doc.on.clipboard"), children: [
+                UIAction(title: String(localized: "Send Clipboard to Mac…"), attributes: ready) { [weak c] _ in
+                    used(); c?.presentClipboardSend()
+                },
+                UIAction(title: String(localized: "Get Mac Clipboard"), attributes: ready) { [weak c] _ in
+                    used(); c?.receiveClipboard()
+                },
+                UIAction(title: String(localized: "Sync Automatically"), state: state.clipboardAutomatic ? .on : .off) { [weak c] _ in
+                    used(); c?.setClipboardAutomaticSync(!state.clipboardAutomatic)
+                },
+            ]))
         }
-        menu = UIMenu(children: profiles + [pan, input, keyboard])
+        menu = UIMenu(children: children)
     }
 
     override func cancelActiveInteraction() {
@@ -619,28 +679,34 @@ final class SessionRadialGestureCoordinator: NSObject, UIGestureRecognizerDelega
 }
 
 /// Circular UIKit container strictly bounded to the radial menu medallion.
-/// Owns all four radial control subviews (Retina, Fit, Close, Center Dismiss),
-/// absorbs stray taps on ring gaps between buttons, and leaves every point
-/// outside the circular menu completely transparent to `DesktopView`.
+/// Owns the radial control subviews (`Options`, optional live `Audio`,
+/// `Keyboard`, `Close`, and Center Dismiss), absorbs stray taps on ring gaps
+/// between buttons, and leaves every point outside the circular menu
+/// completely transparent to `DesktopView`.
 final class RadialMenuContainerView: UIView, UIGestureRecognizerDelegate {
     private weak var controller: SessionController?
     private var layout: RadialMenuLayout
     let menuButton: SessionMenuControl
-    let fitButton: SessionActionButton
+    private(set) var audioButton: AudioMenuControl?
+    let keyboardButton: SessionActionButton
     let closeButton: SessionActionButton
     let dismissButton: SessionDismissButton
     let ringTapRecognizer: UITapGestureRecognizer
     private(set) var gestureCoordinator: SessionRadialGestureCoordinator?
 
     var controls: [SessionToolbarControl] {
-        [menuButton, fitButton, closeButton, dismissButton]
+        if let audioButton {
+            return [menuButton, audioButton, keyboardButton, closeButton, dismissButton]
+        }
+        return [menuButton, keyboardButton, closeButton, dismissButton]
     }
 
-    init(controller: SessionController, layout: RadialMenuLayout, onClose: @escaping () -> Void) {
+    init(controller: SessionController, layout: RadialMenuLayout, showsAudio: Bool = false, onClose: @escaping () -> Void) {
         self.controller = controller
         self.layout = layout
         menuButton = SessionMenuControl(controller: controller)
-        fitButton = SessionActionButton(toolbar: controller.toolbar)
+        audioButton = showsAudio ? AudioMenuControl(controller: controller) : nil
+        keyboardButton = SessionActionButton(toolbar: controller.toolbar)
         closeButton = SessionActionButton(toolbar: controller.toolbar)
         dismissButton = SessionDismissButton(toolbar: controller.toolbar)
         ringTapRecognizer = UITapGestureRecognizer()
@@ -651,14 +717,13 @@ final class RadialMenuContainerView: UIView, UIGestureRecognizerDelegate {
         isMultipleTouchEnabled = true
         isAccessibilityElement = false
 
-        fitButton.configureRadialAppearance(
-            title: String(localized: "Fit"),
-            symbolName: "arrow.up.left.and.arrow.down.right",
+        keyboardButton.configureRadialAppearance(
+            title: String(localized: "Keyboard"),
+            symbolName: "keyboard",
             style: .command
         )
-        fitButton.accessibilityLabel = String(localized: "Fit")
-        fitButton.accessibilityHint = String(localized: "Shows the whole remote desktop.")
-        fitButton.accessibilityIdentifier = "radial.fit"
+        keyboardButton.accessibilityLabel = String(localized: "Keyboard")
+        keyboardButton.accessibilityIdentifier = "radial.keyboard"
 
         closeButton.configureRadialAppearance(
             title: String(localized: "Close"),
@@ -673,7 +738,7 @@ final class RadialMenuContainerView: UIView, UIGestureRecognizerDelegate {
             control.usesCircularHitRegion = true
             addSubview(control)
         }
-        accessibilityElements = [menuButton, fitButton, closeButton, dismissButton]
+        accessibilityElements = controls
 
         ringTapRecognizer.addTarget(self, action: #selector(handleRingGapTap(_:)))
         ringTapRecognizer.numberOfTouchesRequired = 1
@@ -686,20 +751,48 @@ final class RadialMenuContainerView: UIView, UIGestureRecognizerDelegate {
         ringTapRecognizer.delegate = self
         addGestureRecognizer(ringTapRecognizer)
 
-        update(controller: controller, layout: layout, onClose: onClose)
+        update(controller: controller, layout: layout, showsAudio: showsAudio, onClose: onClose)
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
 
-    func update(controller: SessionController, layout: RadialMenuLayout, onClose: @escaping () -> Void) {
+    func update(controller: SessionController, layout: RadialMenuLayout, showsAudio: Bool = false, onClose: @escaping () -> Void) {
         self.controller = controller
         let layoutChanged = self.layout != layout
         self.layout = layout
+        var controlsChanged = false
+        if showsAudio, audioButton == nil {
+            let audio = AudioMenuControl(controller: controller)
+            audio.usesCircularHitRegion = true
+            addSubview(audio)
+            audioButton = audio
+            controlsChanged = true
+        } else if !showsAudio, let audio = audioButton {
+            audio.radialMultiTouchInProgress = nil
+            audio.removeFromSuperview()
+            audioButton = nil
+            controlsChanged = true
+        }
+        if controlsChanged {
+            accessibilityElements = controls
+        }
         menuButton.refresh()
-        fitButton.action = { [weak controller] in controller?.fit() }
+        audioButton?.refresh()
+        keyboardButton.action = { [weak controller] in
+            guard let controller else { return }
+            controller.keyboardShown.toggle()
+            controller.toolbar.dismiss()
+        }
+        keyboardButton.accessibilityValue = controller.keyboardShown
+            ? String(localized: "Shown")
+            : String(localized: "Hidden")
+        keyboardButton.accessibilityHint = controller.keyboardShown
+            ? String(localized: "Hides the on-screen keyboard.")
+            : String(localized: "Shows the on-screen keyboard.")
+        keyboardButton.accessibilityTraits = controller.keyboardShown ? [.button, .selected] : [.button]
         closeButton.action = onClose
         dismissButton.onDismiss = { [weak toolbar = controller.toolbar] in toolbar?.dismiss() }
         dismissButton.isEnabled = controller.toolbar.canDismiss
-        if layoutChanged {
+        if layoutChanged || controlsChanged {
             setNeedsLayout()
         }
         if window != nil {
@@ -776,8 +869,9 @@ final class RadialMenuContainerView: UIView, UIGestureRecognizerDelegate {
                    width: size.width, height: size.height)
         }
 
-        menuButton.frame = centeredFrame(offset: layout.offset(for: .display), size: itemSize)
-        fitButton.frame = centeredFrame(offset: layout.offset(for: .fit), size: itemSize)
+        menuButton.frame = centeredFrame(offset: layout.offset(for: .options), size: itemSize)
+        audioButton?.frame = centeredFrame(offset: layout.offset(for: .audio), size: itemSize)
+        keyboardButton.frame = centeredFrame(offset: layout.offset(for: .keyboard), size: itemSize)
         closeButton.frame = centeredFrame(offset: layout.offset(for: .close), size: itemSize)
         dismissButton.frame = centeredFrame(offset: .zero, size: hubSize)
     }
@@ -807,20 +901,26 @@ final class RadialMenuContainerView: UIView, UIGestureRecognizerDelegate {
 private struct RadialMenuRepresentable: UIViewRepresentable {
     let controller: SessionController
     let layout: RadialMenuLayout
+    let showsAudio: Bool
     let onClose: () -> Void
     /// Observed triggers forwarded from SwiftUI so button state stays in sync.
     let profile: DisplayProfile
     let panEnabled: Bool
     let trackpad: Bool
     let keyboardShown: Bool
+    let audioState: AudioPipeline.State?
+    let audioEnabled: Bool
+    let audioMuted: Bool
+    let clipboardReady: Bool
+    let clipboardAutomatic: Bool
     let canDismiss: Bool
 
     func makeUIView(context: Context) -> RadialMenuContainerView {
-        RadialMenuContainerView(controller: controller, layout: layout, onClose: onClose)
+        RadialMenuContainerView(controller: controller, layout: layout, showsAudio: showsAudio, onClose: onClose)
     }
 
     func updateUIView(_ view: RadialMenuContainerView, context: Context) {
-        view.update(controller: controller, layout: layout, onClose: onClose)
+        view.update(controller: controller, layout: layout, showsAudio: showsAudio, onClose: onClose)
     }
 
     static func dismantleUIView(_ uiView: RadialMenuContainerView, coordinator: ()) {
@@ -838,6 +938,7 @@ private struct RadialMenuRepresentable: UIViewRepresentable {
 /// all points outside the circular menu transparent to `DesktopView`.
 struct SessionRadialControlsOverlay: View {
     let controller: SessionController
+    var showsAudio = false
     let onClose: () -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
@@ -860,6 +961,7 @@ struct SessionRadialControlsOverlay: View {
             let layout = RadialMenuLayout(
                 safeRect: safeRect,
                 anchor: controller.toolbar.anchorPoint,
+                includesAudio: showsAudio,
                 isAccessibilityTextSize: dynamicTypeSize.isAccessibilitySize
             )
             let localCenter = CGPoint(
@@ -902,11 +1004,17 @@ struct SessionRadialControlsOverlay: View {
             RadialMenuRepresentable(
                 controller: controller,
                 layout: layout,
+                showsAudio: showsAudio,
                 onClose: onClose,
                 profile: controller.profile,
                 panEnabled: controller.panEnabled,
                 trackpad: controller.trackpad,
                 keyboardShown: controller.keyboardShown,
+                audioState: showsAudio ? controller.audioState : nil,
+                audioEnabled: showsAudio ? controller.audioEnabled : false,
+                audioMuted: showsAudio ? controller.audioMuted : false,
+                clipboardReady: controller.clipboard?.isAuthorized == true,
+                clipboardAutomatic: controller.clipboard?.automaticSync == true,
                 canDismiss: controller.toolbar.canDismiss
             )
             .frame(width: layout.diameter, height: layout.diameter)
